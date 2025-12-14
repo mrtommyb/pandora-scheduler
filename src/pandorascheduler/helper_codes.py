@@ -1,16 +1,17 @@
-import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
 import json
-import pandas as pd
-import numpy as np
-from astropy.time import Time
-from tqdm import tqdm
+import logging
 import os
 import re
-import logging
-import requests
-from multiprocessing import Pool
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
 from functools import partial
+from multiprocessing import Pool
+
+import numpy as np
+import pandas as pd
+import requests
+from astropy.time import Time
+from tqdm import tqdm
 
 PACKAGEDIR = os.path.abspath(os.path.dirname(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(PACKAGEDIR, "..", ".."))
@@ -238,9 +239,10 @@ def break_long_sequences(start, end, step):
 #
 #
 def read_json_files(targ_list, fn_tmp):
-    import pandas as pd
-    import numpy as np
     import json
+
+    import numpy as np
+    import pandas as pd
     target_list_copy = targ_list.copy()
     with open(fn_tmp, 'r') as file:
         data = json.load(file)
@@ -283,9 +285,9 @@ def read_json_files(targ_list, fn_tmp):
 #
 #
 def update_target_list(targ_list, pl_names, which_targets):
+    import glob
     import os
     import warnings
-    import glob
     warnings.filterwarnings("ignore", category=FutureWarning)
     # filtered_targ_list = targ_list[targ_list["Planet Name"].isin(pl_names)]
     # updated_targ_list = filtered_targ_list.copy()
@@ -336,8 +338,9 @@ def update_target_list(targ_list, pl_names, which_targets):
     return updated_targ_list
 
 def find_first_visible_target(start, stop, names):
-    from tqdm import tqdm
     from astropy.time import Time
+    from tqdm import tqdm
+
     # for n, name in tqdm(enumerate(names), desc=f"Finding visible aux target for {start} to {stop}", total=len(names)):
     for n in tqdm(range(len(names)), desc="Finding visible aux target for " + str(start) + ' to ' + str(stop)):
         try:
@@ -1068,10 +1071,11 @@ def read_priority_csv(file_path):
     return metadata, df
 
 def create_aux_list(target_definition_files, PACKAGEDIR):
-    import pandas as pd
-    from functools import reduce
     import os
-    
+    from functools import reduce
+
+    import pandas as pd
+
     # Create full file paths
     file_paths = [f"{PACKAGEDIR}/data/{file}_targets.csv" for file in target_definition_files]
 
@@ -1462,9 +1466,9 @@ def find_file(filename):
 #     return o_df, d_flag
 
 def update_coordinates_astropy(ra0, dec0, pm_ra, pm_dec):
+    import astropy.units as u
     from astropy.coordinates import SkyCoord
     from astropy.time import Time
-    import astropy.units as u
 
     t0 = Time('J2016.0')
     t1 = Time('2026-01-05')

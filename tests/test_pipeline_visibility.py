@@ -3,11 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+from pandorascheduler_rework.config import PandoraSchedulerConfig
 from pandorascheduler_rework.pipeline import (
     SchedulerPaths,
     _maybe_generate_visibility,
 )
-from pandorascheduler_rework.config import PandoraSchedulerConfig
 
 
 def _repo_root() -> Path:

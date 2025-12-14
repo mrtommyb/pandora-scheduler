@@ -7,15 +7,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-
 from astropy.time import Time
 
 from pandorascheduler_rework import observation_utils
-from pandorascheduler_rework.utils.string_ops import remove_suffix
 from pandorascheduler_rework.utils.array_ops import (
-    remove_short_sequences,
     break_long_sequences,
+    remove_short_sequences,
 )
+from pandorascheduler_rework.utils.string_ops import remove_suffix
 from pandorascheduler_rework.xml import observation_sequence
 
 
@@ -157,16 +156,24 @@ def test_schedule_occultation_targets_selects_visible_target(tmp_path: Path):
 
 def test_save_observation_time_report_writes_csv(tmp_path: Path):
     output = tmp_path / "report.csv"
+    requested = tmp_path / "requested.csv"
+    pd.DataFrame(
+        {
+            "Star Name": ["Aux"],
+            "Number of Hours Requested": [1.0],
+        }
+    ).to_csv(requested, index=False)
     observation_utils.save_observation_time_report(
         {"WASP-107 b": timedelta(hours=2), "Aux": timedelta(hours=1)},
         pd.DataFrame({"Planet Name": ["WASP-107 b"]}),
         output,
+        requested_hours_catalogs=[requested],
     )
 
     content = output.read_text().splitlines()
-    assert content[0] == "Target,Is Primary,Total Observation Time (hours)"
-    assert "WASP-107 b,Yes,2.00" in content[1:]
-    assert "Aux,No,1.00" in content[1:]
+    assert content[0] == "Target,Is Primary,Hours Requested,Hours Scheduled,Hours Delta"
+    assert "WASP-107 b,Yes,,2.00," in content[1:]
+    assert "Aux,No,1.00,1.00,0.00" in content[1:]
 
 
 def test_schedule_occultation_targets_handles_zero_duration_window(tmp_path: Path):
@@ -322,6 +329,7 @@ def test_check_if_transits_in_obs_window_matches_basic_case(
             "DEC",
             "Obs Start",
             "Obs Gap Time",
+            "Visit Duration",
             "Transit Coverage",
             "SAA Overlap",
             "Schedule Factor",
@@ -334,6 +342,7 @@ def test_check_if_transits_in_obs_window_matches_basic_case(
         {
             "Planet Name": ["WASP-107 b"],
             "Star Name": ["WASP-107"],
+            "Obs Window (hrs)": [24.0],
         }
     )
 
@@ -348,7 +357,6 @@ def test_check_if_transits_in_obs_window_matches_basic_case(
         start,
         start + timedelta(days=1),
         obs_rng,
-        timedelta(minutes=90),
         [0.5, 0.25, 0.25],
         0.0,
         tmp_path / "targets",
@@ -401,12 +409,13 @@ def test_no_transits_in_observation_window(
     })
     temp_df = pd.DataFrame(columns=[
         "Planet Name", "RA", "DEC", "Obs Start", "Obs Gap Time",
-        "Transit Coverage", "SAA Overlap", "Schedule Factor",
+        "Visit Duration", "Transit Coverage", "SAA Overlap", "Schedule Factor",
         "Transit Factor", "Quality Factor", "Comments",
     ])
     target_list = pd.DataFrame({
         "Planet Name": ["NoTransit b"],
         "Star Name": ["NoTransit"],
+        "Obs Window (hrs)": [24.0],
     })
     
     obs_rng = pd.date_range(start, start + timedelta(minutes=90), freq="min")
@@ -422,7 +431,6 @@ def test_no_transits_in_observation_window(
         start,  # sched_start
         start + timedelta(days=1),  # sched_stop
         obs_rng,
-        timedelta(minutes=90),
         [0.5, 0.25, 0.25],
         0.0,
         tmp_path / "targets",
@@ -472,12 +480,13 @@ def test_partial_transit_coverage_calculation(
     })
     temp_df = pd.DataFrame(columns=[
         "Planet Name", "RA", "DEC", "Obs Start", "Obs Gap Time",
-        "Transit Coverage", "SAA Overlap", "Schedule Factor",
+        "Visit Duration", "Transit Coverage", "SAA Overlap", "Schedule Factor",
         "Transit Factor", "Quality Factor", "Comments",
     ])
     target_list = pd.DataFrame({
         "Planet Name": ["PartialPlanet"],
         "Star Name": ["PartialStar"],
+        "Obs Window (hrs)": [24.0],
     })
     
     obs_rng = pd.date_range(start, start + timedelta(minutes=90), freq="min")
@@ -492,7 +501,6 @@ def test_partial_transit_coverage_calculation(
         start,
         start + timedelta(days=1),
         obs_rng,
-        timedelta(minutes=90),
         [0.5, 0.25, 0.25],
         0.0,  # transit_coverage_min = 0.0, so partial transit is OK
         tmp_path / "targets",

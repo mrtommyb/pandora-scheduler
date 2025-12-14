@@ -99,7 +99,7 @@ A collection of shared helper functions.
 
 The rework coexists with the legacy system by sharing the **Data Layer**:
 
-1.  **Input Data:** Both systems read from `src/pandorascheduler/data/`.
+1.  **Input Data:** The rework reads manifests and visibility products from the run's output directory (for example, `output_standalone/data/`). The legacy system reads from `src/pandorascheduler/data/`.
 2.  **Output Data:** The rework writes to a specified output directory, but mimics the directory structure of the legacy system (e.g., `targets/StarName/PlanetName/Visibility...`) to ensure downstream tools can process the results.
 3.  **Independence:** The rework code *never* imports from `src/pandorascheduler`. This means the legacy code can eventually be deleted without breaking the rework (once the data directory is moved or redefined).
 

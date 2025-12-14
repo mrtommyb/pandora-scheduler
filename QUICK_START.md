@@ -40,6 +40,12 @@ This will generate:
 - **Observation Time Report**: Time allocation per target
 - **Tracker files**: CSV and pickle formats for state tracking
 
+Notes about requested hours and standard stars:
+- For auxiliary/standard targets, the scheduler prefers targets that have not yet met their per-target `Number of Hours Requested` budget.
+- If the only visible non-primary targets have already met their requested hours, the scheduler may still schedule them and will emit a warning that it did so.
+- The Observation Time Report includes requested-vs-scheduled hours for non-primary targets and requires `Number of Hours Requested` to be present in the non-primary catalogs.
+- If no standard star is fully visible during a standard-star observation window, the scheduler logs a warning.
+
 ### Output Files
 
 When using `--target-definitions` and `--generate-visibility`, files are organized as:
@@ -134,11 +140,10 @@ poetry run python run_scheduler.py \
 Create `config.json`:
 ```json
 {
-    "obs_window_hours": 24.0,
+    "schedule_step_hours": 24.0,
     "transit_coverage_min": 0.4,
     "transit_scheduling_weights": [0.8, 0.0, 0.2],
     "min_visibility": 0.5,
-    "deprioritization_limit_hours": 48.0,
     "commissioning_days": 0,
     "show_progress": true
 }
@@ -171,7 +176,7 @@ poetry run python run_scheduler.py \
 ```
 
 **Note:** If `--target-definitions` is provided, the script will:
-1. Generate `*_targets.csv` manifests in `output/data/`
+1. Generate `*_targets.csv` manifests in `output/data/` (under your chosen `--output` directory)
 2. If `--generate-visibility` is set, create visibility files in `output/data/targets/` and `output/data/aux_targets/`
 3. Use these generated files for scheduling
 
@@ -197,7 +202,7 @@ poetry run python run_scheduler.py \
 - `--output DIR` - Output directory
 
 #### Scheduling Parameters
-- `--obs-window HOURS` - Observation window in hours (default: 24.0)
+- `--schedule-step-hours HOURS` - Scheduler rolling window step size in hours (default: 24.0)
 - `--transit-coverage FRACTION` - Minimum transit coverage (default: 0.4)
 - `--weights W1,W2,W3` - Schedule weights: coverage,saa,schedule (default: 0.8,0.0,0.2)
 - `--min-visibility FRACTION` - Minimum visibility for auxiliary targets (default: 0.5)
@@ -260,7 +265,7 @@ poetry run python run_scheduler.py \
     --output ./custom \
     --weights "0.7,0.1,0.2" \
     --min-visibility 0.6 \
-    --obs-window 20.0
+    --schedule-step-hours 20.0
 ```
 
 ### Troubleshooting

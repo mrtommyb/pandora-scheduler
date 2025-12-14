@@ -8,14 +8,13 @@ import pandas as pd
 import pytest
 from astropy.time import Time
 
-from pandorascheduler_rework.visibility.catalog import build_visibility_catalog
 from pandorascheduler_rework.config import PandoraSchedulerConfig
+from pandorascheduler_rework.visibility.catalog import build_visibility_catalog
 from pandorascheduler_rework.visibility.geometry import (
     build_minute_cadence,
     compute_saa_crossings,
     interpolate_gmat_ephemeris,
 )
-
 
 MJD_EPOCH = datetime(1858, 11, 17)
 
@@ -253,8 +252,9 @@ def test_resolve_star_coord_uses_metadata_fallback():
 
 def test_resolve_star_coord_raises_error_when_missing():
     """Test that _resolve_star_coord raises error when coordinates missing."""
-    from pandorascheduler_rework.visibility import catalog
     import pytest
+
+    from pandorascheduler_rework.visibility import catalog
 
     row = pd.Series(
         {

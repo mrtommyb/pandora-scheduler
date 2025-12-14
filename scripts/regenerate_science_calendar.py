@@ -1,9 +1,11 @@
 import logging
-from pathlib import Path
 import sys
 from datetime import datetime
+from pathlib import Path
+
 from pandorascheduler_rework import science_calendar
 from pandorascheduler_rework.config import PandoraSchedulerConfig
+
 
 def regenerate_calendar(output_dir_str: str, use_legacy_mode: bool = False):
     output_dir = Path(output_dir_str).resolve()

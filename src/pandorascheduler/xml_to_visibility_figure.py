@@ -1,9 +1,10 @@
-from lxml import etree
-import matplotlib.pyplot as plt
-from astropy.time import Time
-import pandas as pd
-import numpy as np
 import os
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from astropy.time import Time
+from lxml import etree
 
 # Use package-relative data path instead of a hardcoded user path
 PACKAGEDIR = os.path.abspath(os.path.dirname(__file__))

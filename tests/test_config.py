@@ -1,8 +1,9 @@
 """Unit tests for unified configuration system."""
 
-import pytest
 from datetime import datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 from pandorascheduler_rework.config import PandoraSchedulerConfig
 
@@ -19,7 +20,7 @@ class TestPandoraSchedulerConfig:
         
         assert config.window_start == datetime(2026, 2, 5)
         assert config.window_end == datetime(2027, 2, 5)
-        assert config.obs_window == timedelta(hours=24)  # Default
+        assert config.schedule_step == timedelta(hours=24)  # Default
         
     def test_full_config(self):
         """Test creating config with all parameters."""

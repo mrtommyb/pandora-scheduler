@@ -18,9 +18,10 @@ class TestDatetimeColumnGeneration:
         """Verify that generated star visibility includes Time_UTC column."""
         # Create minimal test case by directly calling the function
         from collections import namedtuple
-        from astropy.coordinates import SkyCoord
+
         import astropy.units as u
-        
+        from astropy.coordinates import SkyCoord
+
         # Create simple config-like object
         Config = namedtuple('Config', ['sun_avoidance_deg', 'moon_avoidance_deg', 'earth_avoidance_deg'])
         config = Config(sun_avoidance_deg=91.0, moon_avoidance_deg=25.0, earth_avoidance_deg=86.0)

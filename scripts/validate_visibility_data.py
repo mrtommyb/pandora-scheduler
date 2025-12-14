@@ -3,9 +3,11 @@
 Validate integrity of visibility data files.
 Checks that all expected planet visibility files exist and contain required data.
 """
-import pandas as pd
-from pathlib import Path
 import sys
+from pathlib import Path
+
+import pandas as pd
+
 
 def main():
     targets_dir = Path("src/pandorascheduler/data/targets")

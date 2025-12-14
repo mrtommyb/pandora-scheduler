@@ -1,17 +1,19 @@
 """Functions to calculate transits times from a target list"""
-import os
-import numpy as np
-import pandas as pd
-from astropy import units as u
-from astropy.coordinates import SkyCoord
-from astropy.coordinates import EarthLocation
-from astropy.time import Time
-from datetime import timedelta
 # from astropy.time import TimeDelta
 # from progressbar import ProgressBar
 import logging
+import os
+from datetime import timedelta
+
+import numpy as np
+import pandas as pd
+from astropy import units as u
+from astropy.coordinates import EarthLocation, SkyCoord
+from astropy.time import Time
+
 # import barycorr
 from tqdm import tqdm
+
 # from . import barycorr
 
 PACKAGEDIR = os.path.abspath(os.path.dirname(__file__))
@@ -273,6 +275,7 @@ def transit_timing(target_list:str, planet_name:str, star_name:str):
     Visible = np.array(vis_data['Visible'])
 
     from astropy.time import Time
+
     # Convert time to datetime
     T_mjd_utc = Time(t_mjd_utc, format='mjd', scale='utc')
     T_iso_utc = Time(T_mjd_utc.iso, format='iso', scale='utc')

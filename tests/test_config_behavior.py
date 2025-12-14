@@ -6,8 +6,9 @@ changing config values actually changes the system's output.
 
 from datetime import datetime
 from pathlib import Path
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 from astropy.time import Time
 
 from pandorascheduler_rework.config import PandoraSchedulerConfig

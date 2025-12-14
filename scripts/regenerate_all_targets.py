@@ -2,6 +2,7 @@
 """Regenerate all target lists with priority-based sorting."""
 
 from pathlib import Path
+
 from pandorascheduler_rework.targets.manifest import build_target_manifest
 
 target_def_base = Path("../PandoraTargetList/target_definition_files")

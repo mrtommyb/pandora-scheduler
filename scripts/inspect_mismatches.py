@@ -1,7 +1,8 @@
-import pandas as pd
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
-import xml.etree.ElementTree as ET
+import pandas as pd
+
 
 def inspect_mismatch():
     legacy_dir = Path("src/pandorascheduler/data/baseline")

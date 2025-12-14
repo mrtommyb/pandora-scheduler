@@ -4,15 +4,16 @@ These tests verify that the scheduler handles error conditions gracefully
 and provides helpful error messages when things go wrong.
 """
 
-import pytest
 from datetime import datetime
+
 import pandas as pd
+import pytest
 
 from pandorascheduler_rework.config import PandoraSchedulerConfig
 from pandorascheduler_rework.scheduler import (
-    run_scheduler,
     SchedulerInputs,
     SchedulerPaths,
+    run_scheduler,
 )
 
 
@@ -162,25 +163,6 @@ class TestSchedulerErrorHandling:
         assert outputs.schedule is not None
         assert isinstance(outputs.schedule, pd.DataFrame)
     
-    def test_deprioritization_at_exact_limit(self, tmp_path):
-        """Test deprioritization exactly at time limit."""
-        # This is a placeholder - full implementation would need:
-        # 1. Previous tracker with target observed exactly deprioritization_limit_hours ago
-        # 2. Setup that allows scheduling to run
-        # 3. Verification that target is correctly deprioritized
-        
-        config = PandoraSchedulerConfig(
-            window_start=datetime(2026, 1, 1),
-            window_end=datetime(2026, 1, 2),
-            deprioritization_limit_hours=24.0,  # 24 hour limit
-        )
-        
-        # Verify config parameter is set
-        assert config.deprioritization_limit_hours == 24.0
-        
-        # TODO: Full test would create tracker with observation at exactly t-24h
-        # and verify it gets deprioritized
-        
     def test_invalid_observation_window(self):
         """Test that invalid observation window is handled."""
         # Create config with window_end before window_start

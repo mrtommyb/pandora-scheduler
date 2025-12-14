@@ -1,11 +1,12 @@
-import xml.etree.ElementTree as ET
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from datetime import datetime
-from astropy.time import Time
 import os
+import xml.etree.ElementTree as ET
+from datetime import datetime
+
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+import pandas as pd
 import tqdm as tqdm
+from astropy.time import Time
 
 PACKAGEDIR = os.path.abspath(os.path.dirname(__file__))
 

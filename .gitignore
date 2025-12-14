@@ -63,9 +63,9 @@ output_standalone/data/aux_targets/
 
 # Generated manifest files (regenerated from source)
 src/pandorascheduler/data/*_targets.csv
-src/pandorascheduler/data/aux_list_new.csv
+src/pandorascheduler/data/all_targets.csv
 output_standalone/data/*_targets.csv
-output_standalone/data/aux_list_new.csv
+output_standalone/data/all_targets.csv
 
 # Generated schedules and XMLs
 output_standalone/*.csv
@@ -87,6 +87,7 @@ src/pandorascheduler/data/ToO_list.csv
 *.pkl
 *.png
 *.zip
+*.prof
 
 # Specific generated files
 src/pandorascheduler/data/Deprioritized_Targets_*.json

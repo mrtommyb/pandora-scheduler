@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
-
 
 from pandorascheduler_rework import observation_utils as rework_helper
 from pandorascheduler_rework.config import PandoraSchedulerConfig
@@ -57,10 +56,11 @@ def build_schedule(config: PandoraSchedulerConfig) -> SchedulerResult:
         SchedulerResult with paths to generated files
     """
     if config.output_dir is None:
-        # Should be caught by config validation or caller, but safe fallback
-        output_dir = Path("output")
-    else:
-        output_dir = config.output_dir
+        raise ValueError(
+            "config.output_dir must be set (no default output directory fallback)"
+        )
+
+    output_dir = config.output_dir
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -144,6 +144,16 @@ def build_schedule(config: PandoraSchedulerConfig) -> SchedulerResult:
             f"Provided targets_manifest not found: {config.targets_manifest}"
         )
 
+    # Load primary manifest early so we can validate before generating visibility
+    # (visibility generation can take a long time).
+    target_list = read_csv_cached(str(primary_target_csv))
+    if target_list is None:
+        raise FileNotFoundError(
+            f"Primary target manifest not found: {primary_target_csv}"
+        )
+
+    _validate_primary_visit_windows(target_list, config)
+
     _maybe_generate_visibility(
         config,
         paths,
@@ -154,12 +164,6 @@ def build_schedule(config: PandoraSchedulerConfig) -> SchedulerResult:
         monitoring_target_csv,
         occultation_target_csv,
     )
-
-    target_list = read_csv_cached(str(primary_target_csv))
-    if target_list is None:
-        raise FileNotFoundError(
-            f"Primary target manifest not found: {primary_target_csv}"
-        )
 
     scheduler_inputs = SchedulerInputs(
         pandora_start=config.window_start,
@@ -198,6 +202,79 @@ def build_schedule(config: PandoraSchedulerConfig) -> SchedulerResult:
         reports=reports,
         diagnostics=diagnostics,
     )
+
+
+def _validate_primary_visit_windows(
+    target_list, config: PandoraSchedulerConfig
+) -> None:
+    """Validate that required visit windows can accommodate transit scheduling.
+
+    We require per-target 'Obs Window (hrs)' and fail fast if any target's visit
+    duration is too short to fit its transit duration plus required edge buffers.
+    """
+    required_columns = {
+        "Planet Name",
+        "Number of Transits to Capture",
+        "Transit Duration (hrs)",
+    }
+    missing = required_columns.difference(set(getattr(target_list, "columns", [])))
+    if missing:
+        raise ValueError(
+            "Primary target manifest is missing required columns for validation: "
+            + ", ".join(sorted(missing))
+        )
+
+    problems: list[str] = []
+    for _, row in target_list.iterrows():
+        planet = str(row.get("Planet Name", "") or "")
+        if not planet:
+            continue
+
+        transits_needed = row.get("Number of Transits to Capture")
+        try:
+            if transits_needed is None or float(transits_needed) <= 0:
+                continue
+        except (TypeError, ValueError):
+            # If it can't be parsed, let downstream strictness catch it elsewhere.
+            continue
+
+        visit = rework_helper.get_target_visit_duration(planet, target_list)
+
+        td_hours = row.get("Transit Duration (hrs)")
+        if td_hours is None:
+            raise ValueError(
+                f"Target '{planet}' is missing required 'Transit Duration (hrs)'"
+            )
+        try:
+            transit_duration = timedelta(hours=float(td_hours))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Target '{planet}' has invalid 'Transit Duration (hrs)': {td_hours!r}"
+            ) from exc
+
+        edge_buffer = rework_helper.compute_edge_buffer(
+            visit,
+            config.short_visit_threshold_hours,
+            config.short_visit_edge_buffer_hours,
+            config.long_visit_edge_buffer_hours,
+        )
+        required = transit_duration + 2 * edge_buffer
+        if required > visit:
+            problems.append(
+                f"{planet}: visit={visit} transit={transit_duration} "
+                f"edge_buffer={edge_buffer} required={required}"
+            )
+
+    if problems:
+        sample = "\n".join(problems[:20])
+        extra = "" if len(problems) <= 20 else f"\n... and {len(problems) - 20} more"
+        raise ValueError(
+            "One or more targets have Obs Window (hrs) too short to schedule the transit "
+            "with required edge buffers. Fix the target definition file(s) by increasing "
+            "Obs Window (hrs), or adjust edge buffer parameters if that is intended.\n"
+            + sample
+            + extra
+        )
 
 
 def _maybe_generate_visibility(

@@ -5,14 +5,15 @@ rounding-to-nearest-second logic, matching the legacy behavior from
 the removed time_utils.round_to_nearest_second() function.
 """
 
-import pandas as pd
 from datetime import datetime, timedelta
+
+import pandas as pd
 from astropy.time import Time
 
 from pandorascheduler_rework.science_calendar import (
-    _transit_windows,
-    _parse_datetime,
     _extract_visibility_segment,
+    _parse_datetime,
+    _transit_windows,
 )
 
 

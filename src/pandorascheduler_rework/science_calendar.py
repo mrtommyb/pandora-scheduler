@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from numbers import Number
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 from xml.dom import minidom
 
 import numpy as np
@@ -30,13 +30,13 @@ from astropy.time import Time
 from tqdm import tqdm
 
 from pandorascheduler_rework import observation_utils
+from pandorascheduler_rework.config import PandoraSchedulerConfig
 from pandorascheduler_rework.utils.array_ops import (
     break_long_sequences,
     remove_short_sequences,
 )
 from pandorascheduler_rework.utils.io import read_csv_cached, read_parquet_cached
 from pandorascheduler_rework.xml import observation_sequence
-from pandorascheduler_rework.config import PandoraSchedulerConfig
 
 LOGGER = logging.getLogger(__name__)
 
@@ -54,8 +54,6 @@ def generate_science_calendar(
     config: PandoraSchedulerConfig,
     output_path: Optional[Path] = None,
 ) -> Path:
-    """Generate the science calendar XML, matching the legacy behaviour."""
-
     """Generate the science calendar XML, matching the legacy behaviour."""
 
     builder = _ScienceCalendarBuilder(inputs, config)
@@ -85,7 +83,7 @@ class _ScienceCalendarBuilder:
 
         self.data_dir = inputs.data_dir
         self.target_catalog = _read_catalog(self.data_dir / "exoplanet_targets.csv")
-        self.aux_catalog = _read_catalog(self.data_dir / "aux_list_new.csv")
+        self.aux_catalog = _read_catalog(self.data_dir / "all_targets.csv")
         self.occ_catalog = _read_catalog(
             self.data_dir / "occultation-standard_targets.csv"
         )
@@ -96,6 +94,37 @@ class _ScienceCalendarBuilder:
         )
         self.sequence_duration = timedelta(minutes=obs_minutes)
         self.occultation_limit = timedelta(minutes=occ_minutes + 1)
+
+        # Track cumulative observation time for each occultation target
+        self.occultation_obs_time: Dict[str, timedelta] = {}
+
+    def _get_occultation_time_limit(self, target_name: str) -> timedelta:
+        """Get the time limit for an occultation target.
+
+        Looks up 'Number of Hours Requested' from the occultation manifest.
+        Raises ValueError if the catalog is missing, the target is not found,
+        or the required column is missing.
+        """
+        if self.occ_catalog is None or self.occ_catalog.empty:
+            raise ValueError(
+                f"Cannot get time limit for occultation target '{target_name}': "
+                "occultation catalog is not loaded"
+            )
+        match = self.occ_catalog[self.occ_catalog["Star Name"] == target_name]
+        if match.empty:
+            raise ValueError(f"Occultation target '{target_name}' not found in catalog")
+        if "Number of Hours Requested" not in match.columns:
+            raise ValueError(
+                "Occultation catalog is missing required 'Number of Hours Requested' "
+                "column"
+            )
+        hours_req = match.iloc[0]["Number of Hours Requested"]
+        if pd.isna(hours_req):
+            raise ValueError(
+                f"Occultation target '{target_name}' has missing "
+                "'Number of Hours Requested' value"
+            )
+        return timedelta(hours=float(hours_req))
 
     def build_calendar(self) -> ET.Element:
         root = ET.Element("ScienceCalendar", xmlns="/pandora/calendar/")
@@ -238,12 +267,34 @@ class _ScienceCalendarBuilder:
                     visit_times = [transit_start[0], transit_stop[0]]
                     visibility_flags = [1, 1]
                 except Exception:
+                    source, time_min, time_max, in_window = _visibility_diagnostics(
+                        visibility_df, start, stop
+                    )
                     LOGGER.warning(
-                        "No visibility samples within visit for %s", target_name
+                        "No visibility samples within visit for %s (visit=%s..%s, vis_file=%s, vis_range=%s..%s, samples_in_window=%s)",
+                        target_name,
+                        start,
+                        stop,
+                        source,
+                        time_min,
+                        time_max,
+                        in_window,
                     )
                     return
             else:
-                LOGGER.warning("No visibility samples within visit for %s", target_name)
+                source, time_min, time_max, in_window = _visibility_diagnostics(
+                    visibility_df, start, stop
+                )
+                LOGGER.warning(
+                    "No visibility samples within visit for %s (visit=%s..%s, vis_file=%s, vis_range=%s..%s, samples_in_window=%s)",
+                    target_name,
+                    start,
+                    stop,
+                    source,
+                    time_min,
+                    time_max,
+                    in_window,
+                )
                 return
 
         visibility_changes = _visibility_change_indices(visibility_flags)
@@ -350,6 +401,22 @@ class _ScienceCalendarBuilder:
                         break
 
                     occ_target = str(occ_df.iloc[oc_index]["Target"])
+
+                    # Check if this occultation target has exceeded its time limit
+                    current_occ_time = self.occultation_obs_time.get(
+                        occ_target, timedelta()
+                    )
+                    target_time_limit = self._get_occultation_time_limit(occ_target)
+                    if current_occ_time >= target_time_limit:
+                        LOGGER.info(
+                            "Skipping %s: exceeded occultation time limit (%.1f/%.1f hrs)",
+                            occ_target,
+                            current_occ_time.total_seconds() / 3600,
+                            target_time_limit.total_seconds() / 3600,
+                        )
+                        oc_index += 1
+                        continue
+
                     occ_info = _lookup_occultation_info(
                         occ_target,
                         self.target_catalog,
@@ -374,6 +441,14 @@ class _ScienceCalendarBuilder:
                         dec_occ,
                         occ_info if occ_info is not None else pd.DataFrame(),
                     )
+
+                    # Track the observation time for this occultation target
+                    sequence_duration = next_value - current
+                    self.occultation_obs_time[occ_target] = (
+                        self.occultation_obs_time.get(occ_target, timedelta())
+                        + sequence_duration
+                    )
+
                     seq_counter += 1
                     oc_index += 1
                     current = next_value
@@ -453,6 +528,13 @@ class _ScienceCalendarBuilder:
         if not self.config.use_target_list_for_occultations:
             candidates.reverse()
 
+        # Build set of targets that have exceeded their time limit
+        excluded_targets = {
+            name
+            for name, obs_time in self.occultation_obs_time.items()
+            if obs_time >= self._get_occultation_time_limit(name)
+        }
+
         for csv_path, label, vis_root in candidates:
             result_df, flag = _build_occultation_schedule(
                 expanded_starts,
@@ -465,37 +547,10 @@ class _ScienceCalendarBuilder:
                 reference_ra,
                 reference_dec,
                 self.config.prioritise_occultations_by_slew,
+                excluded_targets,
             )
             if flag and result_df is not None:
                 return result_df, True
-
-        # Fallback: if no candidate schedule was produced but we do have an
-        # occultation catalog, produce a best-effort schedule using the first
-        # available occultation target. This makes the calendar generator more
-        # resilient in cases where visibility matching fails but a reasonable
-        # occultation candidate exists (useful for tests and degraded inputs).
-        try:
-            if not self.occ_catalog.empty and "Star Name" in self.occ_catalog.columns:
-                first_row = self.occ_catalog.iloc[0]
-                target_name = first_row.get("Star Name")
-                ra = first_row.get("RA") if "RA" in first_row.index else float("nan")
-                dec = first_row.get("DEC") if "DEC" in first_row.index else float("nan")
-                rows = []
-                for s, e in zip(expanded_starts, expanded_stops):
-                    rows.append(
-                        {
-                            "Target": target_name,
-                            "start": s.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            "stop": e.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            "RA": ra,
-                            "DEC": dec,
-                        }
-                    )
-                return (pd.DataFrame(rows), True)
-        except Exception:
-            # If anything goes wrong with the fallback, fall through to None.
-            pass
-
         return None
 
 
@@ -606,19 +661,77 @@ def _lookup_occultation_info(
 def _read_visibility(directory: Path, name: str) -> Optional[pd.DataFrame]:
     """Read star visibility file with caching."""
     path = directory / f"Visibility for {name}.parquet"
-    df = read_parquet_cached(str(path))
+    df = read_parquet_cached(
+        str(path),
+        columns=["Time(MJD_UTC)", "Time_UTC", "Visible"],
+    )
+    if df is None:
+        # Older visibility parquet fixtures (and some historical outputs) may not
+        # include Time_UTC. Fall back to MJD-only visibility timeline.
+        df = read_parquet_cached(
+            str(path),
+            columns=["Time(MJD_UTC)", "Visible"],
+        )
     if df is None:
         LOGGER.debug("Visibility file missing for %s", name)
         return None
+    # Keep the source path for later diagnostics/logging.
+    df.attrs["_source_path"] = str(path)
     if df.empty:
         LOGGER.debug("DF is empty for %s", name)
     return df
 
 
+def _visibility_diagnostics(
+    visibility_df: pd.DataFrame,
+    start: datetime,
+    stop: datetime,
+) -> tuple[str, str, str, str]:
+    """Return (source_path, time_min, time_max, samples_in_window) for warnings."""
+    source = str(visibility_df.attrs.get("_source_path", "<unknown>"))
+    if "Time_UTC" in visibility_df.columns and pd.api.types.is_datetime64_any_dtype(
+        visibility_df["Time_UTC"]
+    ):
+        times = visibility_df["Time_UTC"].to_numpy(dtype="datetime64[ns]")
+        if times.size == 0:
+            return source, "<empty>", "<empty>", "0"
+        time_min = pd.to_datetime(times.min()).to_pydatetime().isoformat(sep=" ")
+        time_max = pd.to_datetime(times.max()).to_pydatetime().isoformat(sep=" ")
+        mask = (times >= np.datetime64(start)) & (times <= np.datetime64(stop))
+        in_window = int(mask.sum())
+        return source, time_min, time_max, str(in_window)
+
+    if "Time(MJD_UTC)" in visibility_df.columns:
+        mjd = visibility_df["Time(MJD_UTC)"].to_numpy(dtype=float)
+        if mjd.size == 0:
+            return source, "<empty>", "<empty>", "0"
+        mjd_min = float(np.nanmin(mjd))
+        mjd_max = float(np.nanmax(mjd))
+        time_min = (
+            Time(mjd_min, format="mjd", scale="utc").to_datetime().isoformat(sep=" ")
+        )
+        time_max = (
+            Time(mjd_max, format="mjd", scale="utc").to_datetime().isoformat(sep=" ")
+        )
+        start_mjd = Time(start).mjd
+        stop_mjd = Time(stop).mjd
+        in_window = int(((mjd >= start_mjd) & (mjd <= stop_mjd)).sum())
+        return source, time_min, time_max, str(in_window)
+
+    return source, "<unknown>", "<unknown>", "<unknown>"
+
+
 def _read_planet_visibility(directory: Path, name: str) -> Optional[pd.DataFrame]:
-    """Read planet visibility file with caching."""
+    """Read planet transit-visibility file with caching.
+
+    Planet visibility parquet files contain transit windows (MJD start/stop), not a
+    per-timestep visibility timeline. Therefore we load the transit window columns.
+    """
     path = directory / f"Visibility for {name}.parquet"
-    df = read_parquet_cached(str(path))
+    df = read_parquet_cached(
+        str(path),
+        columns=["Transit_Start", "Transit_Stop"],
+    )
     if df is None:
         LOGGER.debug("Planet visibility file missing for %s", name)
     return df
@@ -630,31 +743,50 @@ def _extract_visibility_segment(
     stop: datetime,
     min_sequence_minutes: int,
 ) -> tuple[List[datetime], List[int]]:
-    raw_times = Time(
-        visibility_df["Time(MJD_UTC)"].to_numpy(),
-        format="mjd",
-        scale="utc",
-    ).to_datetime()
-    # Normalise astropy datetimes to naive Python datetimes (UTC) so comparisons
-    # with schedule start/stop (which are naive datetimes) behave predictably.
-    raw_times = [
-        (rt.replace(tzinfo=None) if getattr(rt, "tzinfo", None) is not None else rt)
-        for rt in raw_times
-    ]
+    if "Time_UTC" in visibility_df.columns and pd.api.types.is_datetime64_any_dtype(
+        visibility_df["Time_UTC"]
+    ):
+        times_dt64 = visibility_df["Time_UTC"].to_numpy(dtype="datetime64[ns]")
+        start_dt64 = np.datetime64(start)
+        stop_dt64 = np.datetime64(stop)
+        mask = (times_dt64 >= start_dt64) & (times_dt64 <= stop_dt64)
+        if not bool(mask.any()):
+            return [], []
 
-    mask = [start <= value <= stop for value in raw_times]
-    if not any(mask):
-        return [], []
+        window_indices = np.flatnonzero(mask)
 
-    window_indices = [idx for idx, include in enumerate(mask) if include]
-    filtered_times = [raw_times[idx] for idx in window_indices]
-    # Round each time to nearest second
-    visit_times = [
-        (t + timedelta(microseconds=500_000)).replace(microsecond=0)
-        for t in filtered_times
-    ]
+        # Round to nearest second with legacy half-up semantics.
+        # (pandas .round('S') uses bankers rounding; we need >=0.5s to round up.)
+        ns = times_dt64[window_indices].astype("datetime64[ns]").view("int64")
+        rounded_ns = ((ns + 500_000_000) // 1_000_000_000) * 1_000_000_000
+        rounded_dt64 = rounded_ns.view("datetime64[ns]")
+        visit_times = pd.to_datetime(rounded_dt64).to_pydatetime().tolist()
+    else:
+        raw_times = Time(
+            visibility_df["Time(MJD_UTC)"].to_numpy(),
+            format="mjd",
+            scale="utc",
+        ).to_datetime()
+        # Normalise astropy datetimes to naive Python datetimes (UTC) so comparisons
+        # with schedule start/stop (which are naive datetimes) behave predictably.
+        raw_times = [
+            (rt.replace(tzinfo=None) if getattr(rt, "tzinfo", None) is not None else rt)
+            for rt in raw_times
+        ]
 
-    flags = [float(visibility_df.iloc[idx]["Visible"]) for idx in window_indices]
+        mask = [start <= value <= stop for value in raw_times]
+        if not any(mask):
+            return [], []
+
+        window_indices = [idx for idx, include in enumerate(mask) if include]
+        filtered_times = [raw_times[idx] for idx in window_indices]
+        # Round each time to nearest second
+        visit_times = [
+            (t + timedelta(microseconds=500_000)).replace(microsecond=0)
+            for t in filtered_times
+        ]
+
+    flags = [float(visibility_df.iloc[int(idx)]["Visible"]) for idx in window_indices]
     filtered_flags, _ = remove_short_sequences(
         np.asarray(flags, dtype=float),
         min_sequence_minutes,
@@ -759,6 +891,7 @@ def _build_occultation_schedule(
     reference_ra: float,
     reference_dec: float,
     prioritise_by_slew: bool,
+    excluded_targets: Optional[set] = None,
 ) -> tuple[Optional[pd.DataFrame], bool]:
     if not starts or not stops:
         return None, False
@@ -781,6 +914,23 @@ def _build_occultation_schedule(
         occ_list = read_csv_cached(str(list_path))
     except FileNotFoundError:
         LOGGER.warning("Occultation list missing: %s", list_path)
+        return None, False
+
+    # Filter out excluded targets (those that have exceeded their time limit)
+    if excluded_targets and "Star Name" in occ_list.columns:
+        before_count = len(occ_list)
+        occ_list = occ_list[~occ_list["Star Name"].isin(excluded_targets)].reset_index(
+            drop=True
+        )
+        if len(occ_list) < before_count:
+            LOGGER.debug(
+                "Excluded %d occultation targets that exceeded time limit",
+                before_count - len(occ_list),
+            )
+
+    # If no targets remain after exclusion, fail early
+    if occ_list.empty:
+        LOGGER.warning("No occultation targets available after exclusion filter")
         return None, False
 
     if prioritise_by_slew:
@@ -832,8 +982,7 @@ def _transit_windows(
         for t in start_times
     ]
     stop = [
-        (t + timedelta(microseconds=500_000)).replace(microsecond=0)
-        for t in stop_times
+        (t + timedelta(microseconds=500_000)).replace(microsecond=0) for t in stop_times
     ]
     return start, stop
 

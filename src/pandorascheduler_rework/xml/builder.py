@@ -1,5 +1,6 @@
 """XML builder for observation sequences."""
 
+import logging
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
@@ -9,6 +10,8 @@ from pandorascheduler_rework.xml.parameters import (
     populate_nirda_parameters,
     populate_vda_parameters,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 def observation_sequence(
@@ -86,6 +89,13 @@ def _build_observational_parameters(target_name, priority, start, stop, ra, dec)
         start_format = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         stop_format = stop_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     else:
+        LOGGER.warning(
+            "Unable to parse start/stop datetimes for target '%s' (start=%r stop=%r); "
+            "writing times as-is",
+            target_name,
+            start,
+            stop,
+        )
         # Fallback: use provided values as-is
         start_format, stop_format = start, stop
 
@@ -93,6 +103,12 @@ def _build_observational_parameters(target_name, priority, start, stop, ra, dec)
         ra_value = f"{float(ra)}"
         dec_value = f"{float(dec)}"
     except (TypeError, ValueError):
+        LOGGER.warning(
+            "Unable to parse RA/DEC for target '%s' (ra=%r dec=%r); writing sentinel values",
+            target_name,
+            ra,
+            dec,
+        )
         ra_value, dec_value = "-999.0", "-999.0"
 
     return {
@@ -121,4 +137,10 @@ def _duration_in_seconds(start, stop) -> float:
     stop_dt = _to_datetime(stop)
     if start_dt and stop_dt:
         return (stop_dt - start_dt).total_seconds()
+    if start is not None or stop is not None:
+        LOGGER.warning(
+            "Unable to compute duration (seconds) from start/stop (start=%r stop=%r); using 0.0",
+            start,
+            stop,
+        )
     return 0.0

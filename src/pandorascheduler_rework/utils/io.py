@@ -6,8 +6,9 @@ import logging
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
+import numpy as np
 import pandas as pd
 
 LOGGER = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ def _read_csv_with_mtime(
 
 
 def _read_parquet_with_mtime(
-    file_path: str, mtime: Optional[float]
+    file_path: str, mtime: Optional[float], columns: Optional[tuple[str, ...]]
 ) -> Optional[pd.DataFrame]:
     """Internal parquet reader cached by (file_path, mtime).
 
@@ -40,15 +41,17 @@ def _read_parquet_with_mtime(
     """
     path = Path(file_path)
     try:
-        return pd.read_parquet(path)
+        if columns is None:
+            return pd.read_parquet(path)
+        return pd.read_parquet(path, columns=list(columns))
     except Exception as e:
         LOGGER.error(f"Error reading {path}: {e}")
         return None
 
 
 # cache on (file_path, mtime) -- mtime is a float or None (both hashable)
-_read_csv_with_mtime = lru_cache(maxsize=64)(_read_csv_with_mtime)
-_read_parquet_with_mtime = lru_cache(maxsize=64)(_read_parquet_with_mtime)
+_read_csv_with_mtime = lru_cache(maxsize=256)(_read_csv_with_mtime)
+_read_parquet_with_mtime = lru_cache(maxsize=256)(_read_parquet_with_mtime)
 
 
 def read_csv_cached(file_path: str) -> Optional[pd.DataFrame]:
@@ -78,7 +81,11 @@ def read_csv_cached(file_path: str) -> Optional[pd.DataFrame]:
         return None
 
 
-def read_parquet_cached(file_path: str) -> Optional[pd.DataFrame]:
+def read_parquet_cached(
+    file_path: str,
+    *,
+    columns: Sequence[str] | None = None,
+) -> Optional[pd.DataFrame]:
     """Read Parquet file with LRU caching that invalidates when file mtime changes.
 
     Same API as read_csv_cached but for parquet format (10-50x faster I/O).
@@ -95,7 +102,12 @@ def read_parquet_cached(file_path: str) -> Optional[pd.DataFrame]:
                 mtime = os.path.getmtime(str(path))
             except Exception:
                 mtime = None
-        return _read_parquet_with_mtime(str(path), mtime)
+        columns_key: Optional[tuple[str, ...]]
+        if columns is None:
+            columns_key = None
+        else:
+            columns_key = tuple(columns)
+        return _read_parquet_with_mtime(str(path), mtime, columns_key)
     except Exception as e:
         LOGGER.error(f"Error preparing to read {path}: {e}")
         return None
@@ -175,3 +187,67 @@ def read_planet_visibility_cached(
     """
     path = build_visibility_path(base_dir, star_name, planet_name)
     return read_parquet_cached(str(path))
+
+
+def _load_visibility_arrays_with_mtime(
+    file_path: str,
+    mtime: Optional[float],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Internal visibility reader cached by (file_path, mtime).
+
+    Returns raw numpy arrays for the visibility timeline.
+    """
+    path = Path(file_path)
+    if path.suffix == ".csv":
+        vis = pd.read_csv(path, usecols=["Time(MJD_UTC)", "Visible"])
+    else:
+        vis = pd.read_parquet(path, columns=["Time(MJD_UTC)", "Visible"])
+    return vis["Time(MJD_UTC)"].to_numpy(), vis["Visible"].to_numpy()
+
+
+_load_visibility_arrays_with_mtime = lru_cache(maxsize=256)(
+    _load_visibility_arrays_with_mtime
+)
+
+
+def load_visibility_arrays_cached(
+    file_path: Path,
+) -> Optional[tuple[np.ndarray, np.ndarray]]:
+    """Load (time_mjd_utc, visible_flag) arrays with mtime-aware caching."""
+    if not file_path.exists():
+        return None
+    try:
+        mtime = None
+        try:
+            mtime = file_path.stat().st_mtime
+        except Exception:
+            try:
+                mtime = os.path.getmtime(str(file_path))
+            except Exception:
+                mtime = None
+        return _load_visibility_arrays_with_mtime(str(file_path), mtime)
+    except Exception as e:
+        LOGGER.error(f"Error reading visibility arrays from {file_path}: {e}")
+        return None
+
+
+def resolve_star_visibility_file(base_dir: Path | None, star_name: str) -> Path | None:
+    """Return visibility file path for a star if it exists, else None."""
+    if base_dir is None:
+        return None
+    candidate = build_star_visibility_path(base_dir, star_name)
+    return candidate if candidate.is_file() else None
+
+
+def require_planet_visibility_file(
+    base_dir: Path, star_name: str, planet_name: str
+) -> Path:
+    """Return planet visibility file path, raising if missing."""
+    candidate = build_visibility_path(base_dir, star_name, planet_name)
+    if not candidate.is_file():
+        raise FileNotFoundError(
+            f"Planet visibility file not found: {candidate}\n"
+            f"  Star: {star_name}, Planet: {planet_name}\n"
+            f"  Expected path: {candidate}"
+        )
+    return candidate

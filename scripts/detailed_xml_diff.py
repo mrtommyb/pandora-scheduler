@@ -2,8 +2,9 @@
 """Detailed XML comparison to identify all differences between Legacy and Rework."""
 
 import xml.etree.ElementTree as ET
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
+
 
 def parse_xml(path):
     """Parse XML and return root."""

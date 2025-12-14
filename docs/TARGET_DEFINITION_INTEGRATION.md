@@ -17,7 +17,7 @@ The script accepts a base directory containing target definition files (JSON for
 ### 2. Automatic Manifest Generation
 
 When `--target-definitions` is provided, the script:
-- Generates `*_targets.csv` manifests in `output/data/`
+- Generates `*_targets.csv` manifests in `output/data/` (or whatever directory you pass via `--output`)
 - Creates manifests for all 4 categories:
   - `exoplanet_targets.csv` (primary targets)
   - `auxiliary-standard_targets.csv`
@@ -28,7 +28,7 @@ When `--target-definitions` is provided, the script:
 
 With both `--target-definitions` and `--generate-visibility`:
 - Generates visibility time series for all targets
-- Stores in `output/data/targets/` (primary) and `output/data/aux_targets/` (auxiliary)
+- Stores in `output/data/targets/` (primary) and `output/data/aux_targets/` (auxiliary) (under your chosen `--output` directory)
 - Uses GMAT ephemeris for orbit calculations
 - Applies configurable avoidance angles (sun, moon, earth)
 
@@ -57,14 +57,14 @@ poetry run python run_scheduler.py \
 ```
 Generates: Manifests → Schedule → XML (uses existing or on-demand visibility)
 
-#### Mode 3: Use Existing Manifests (Original Behavior)
+#### Mode 3: Use Existing Manifests (No Generation)
 ```bash
 poetry run python run_scheduler.py \
     --start "2026-02-05" \
     --end "2026-02-12" \
     --output ./output
 ```
-Uses: Existing manifests from `src/pandorascheduler/data/`
+Uses: Existing manifests and visibility files already present under `output/data/` (or whatever directory you pass via `--output`).
 
 ## Technical Implementation
 
@@ -107,15 +107,11 @@ The script leverages existing `pandorascheduler_rework.pipeline` functionality:
 
 ## Testing
 
-The changes maintain backward compatibility:
+Use the normal test suite:
 
-### Existing Behavior (No Changes)
 ```bash
-poetry run python run_scheduler.py \
-    --start "2026-02-05" --end "2026-02-12" \
-    --output ./output
+poetry run pytest tests/
 ```
-Still works with existing manifests in `src/pandorascheduler/data/`
 
 ### New Capability
 ```bash
@@ -143,7 +139,7 @@ Please ensure the legacy data directory exists.
 ```
 Target manifest not found: /path/to/exoplanet_targets.csv
 Please provide target definitions via --target-definitions
-or ensure the legacy data directory exists.
+or ensure manifests exist under the selected --output directory.
 ```
 
 ### Validation
@@ -175,7 +171,7 @@ Potential improvements for future versions:
 
 ### For Existing Users
 
-No changes required! The script maintains full backward compatibility.
+If you previously relied on legacy manifests under `src/pandorascheduler/data/`, migrate those manifests/visibility products into your chosen `--output` directory (for example, `output/data/`), or run with `--target-definitions` to regenerate them.
 
 ### For New Users (Recommended Workflow)
 

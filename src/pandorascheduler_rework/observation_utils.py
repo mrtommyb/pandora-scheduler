@@ -14,7 +14,6 @@ scheduling pipeline.
 
 from __future__ import annotations
 
-import functools
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -23,18 +22,188 @@ from typing import Dict, List, Optional, Sequence, cast
 import numpy as np
 import pandas as pd
 from astropy.time import Time
+from pandas.errors import EmptyDataError
 from tqdm import tqdm
 
 from pandorascheduler_rework.targets.manifest import build_target_manifest
 from pandorascheduler_rework.utils.io import (
-    build_star_visibility_path,
-    build_visibility_path,
+    load_visibility_arrays_cached,
     read_parquet_cached,
+    require_planet_visibility_file,
+    resolve_star_visibility_file,
 )
 
 LOGGER = logging.getLogger(__name__)
 
 _PLACEHOLDER_MARKERS = {"SET_BY_TARGET_DEFINITION_FILE", "SET_BY_SCHEDULER"}
+
+# Default column name for per-target visit duration
+_OBS_WINDOW_COLUMN = "Obs Window (hrs)"
+
+
+class TransitUnschedulableError(ValueError):
+    """Raised when a transit cannot be scheduled with the required edge buffers."""
+
+    pass
+
+
+class MissingObsWindowError(ValueError):
+    """Raised when a required per-target observation window is missing."""
+
+    pass
+
+
+def get_target_visit_duration(
+    planet_name: str,
+    target_list: pd.DataFrame,
+) -> timedelta:
+    """Return visit duration from the required 'Obs Window (hrs)' column.
+
+    Parameters
+    ----------
+    planet_name
+        Name of the planet to look up.
+    target_list
+        DataFrame containing target definitions with 'Planet Name' column.
+    Returns
+    -------
+    timedelta
+        The visit duration for this target.
+    """
+    if _OBS_WINDOW_COLUMN not in target_list.columns:
+        raise MissingObsWindowError(
+            f"Target list is missing required column '{_OBS_WINDOW_COLUMN}'"
+        )
+
+    mask = target_list["Planet Name"] == planet_name
+    if not mask.any():
+        raise MissingObsWindowError(
+            f"Target '{planet_name}' not present in target list"
+        )
+
+    value = target_list.loc[mask, _OBS_WINDOW_COLUMN].iloc[0]
+    if pd.isna(value):
+        raise MissingObsWindowError(
+            f"Target '{planet_name}' has missing '{_OBS_WINDOW_COLUMN}' value"
+        )
+
+    try:
+        hours = float(value)
+    except (TypeError, ValueError) as exc:
+        raise MissingObsWindowError(
+            f"Target '{planet_name}' has unparseable '{_OBS_WINDOW_COLUMN}' value: {value}"
+        ) from exc
+
+    if hours <= 0:
+        raise MissingObsWindowError(
+            f"Target '{planet_name}' has invalid '{_OBS_WINDOW_COLUMN}' value: {value}"
+        )
+
+    return timedelta(hours=hours)
+
+
+def compute_edge_buffer(
+    visit_duration: timedelta,
+    short_visit_threshold_hours: float = 12.0,
+    short_visit_edge_buffer_hours: float = 1.5,
+    long_visit_edge_buffer_hours: float = 4.0,
+) -> timedelta:
+    """Compute the edge buffer based on visit duration.
+
+    Parameters
+    ----------
+    visit_duration
+        The total visit duration.
+    short_visit_threshold_hours
+        Visits shorter than this use the short buffer.
+    short_visit_edge_buffer_hours
+        Edge buffer for short visits.
+    long_visit_edge_buffer_hours
+        Edge buffer for long visits.
+
+    Returns
+    -------
+    timedelta
+        The edge buffer to use (same for pre and post transit).
+    """
+    visit_hours = visit_duration.total_seconds() / 3600.0
+    if visit_hours < short_visit_threshold_hours:
+        return timedelta(hours=short_visit_edge_buffer_hours)
+    return timedelta(hours=long_visit_edge_buffer_hours)
+
+
+def validate_transit_schedulable(
+    planet_name: str,
+    transit_duration: timedelta,
+    visit_duration: timedelta,
+    edge_buffer: timedelta,
+) -> None:
+    """Validate that a transit can fit within the visit with required buffers.
+
+    Parameters
+    ----------
+    planet_name
+        Name of the planet (for error messages).
+    transit_duration
+        Duration of the transit.
+    visit_duration
+        Duration of the observation visit.
+    edge_buffer
+        Required buffer before and after transit.
+
+    Raises
+    ------
+    TransitUnschedulableError
+        If the transit cannot fit with required edge buffers.
+    """
+    required_duration = transit_duration + 2 * edge_buffer
+    if required_duration > visit_duration:
+        raise TransitUnschedulableError(
+            f"Transit for {planet_name} cannot be scheduled: "
+            f"transit duration ({transit_duration}) + 2 × edge buffer ({edge_buffer}) "
+            f"= {required_duration} exceeds visit duration ({visit_duration}). "
+            f"Either increase visit duration or reduce edge buffer requirements."
+        )
+
+
+def compute_transit_start_bounds(
+    transit_start: datetime,
+    transit_stop: datetime,
+    visit_duration: timedelta,
+    edge_buffer: timedelta,
+) -> tuple[datetime, datetime]:
+    """Compute earliest and latest valid visit start times for a transit.
+
+    The visit must:
+    - Start at least `edge_buffer` before transit_start
+    - End at least `edge_buffer` after transit_stop
+
+    Parameters
+    ----------
+    transit_start
+        Start time of the transit.
+    transit_stop
+        End time of the transit.
+    visit_duration
+        Total duration of the observation visit.
+    edge_buffer
+        Required buffer before and after transit.
+
+    Returns
+    -------
+    tuple[datetime, datetime]
+        (earliest_start, latest_start) for the visit.
+        If earliest_start > latest_start, no valid start window exists.
+    """
+    # Latest start: transit must start at least edge_buffer after visit start
+    latest_start = transit_start - edge_buffer
+
+    # Earliest start: transit must end at least edge_buffer before visit end
+    # So: visit_start + visit_duration >= transit_stop + edge_buffer
+    # => visit_start >= transit_stop + edge_buffer - visit_duration
+    earliest_start = transit_stop + edge_buffer - visit_duration
+
+    return earliest_start, latest_start
 
 
 def general_parameters(
@@ -91,9 +260,10 @@ def schedule_occultation_targets(
         o_df["Visibility"] = np.nan
 
     if visit_start is not None and visit_stop is not None:
-        description = (
-            "%s to %s: Searching for occultation target from %s"
-            % (visit_start, visit_stop, try_occ_targets)
+        description = "%s to %s: Searching for occultation target from %s" % (
+            visit_start,
+            visit_stop,
+            try_occ_targets,
         )
     else:
         description = "Searching for occultation target from %s" % (try_occ_targets,)
@@ -110,12 +280,15 @@ def schedule_occultation_targets(
         if name in visibility_cache:
             return visibility_cache[name]
 
-        f_path = _resolve_visibility_file(name, base_path)
+        f_path = resolve_star_visibility_file(base_path, name)
         if f_path is None:
             LOGGER.debug("Skipping %s; visibility file not found", name)
             return None
 
-        data = _load_visibility_data(f_path)
+        data = load_visibility_arrays_cached(f_path)
+        if data is None:
+            LOGGER.debug("Skipping %s; visibility file unreadable", name)
+            return None
         visibility_cache[name] = data
         return data
 
@@ -352,6 +525,7 @@ def save_observation_time_report(
     all_target_obs_time: Dict[str, timedelta],
     target_list: pd.DataFrame,
     output_path,
+    requested_hours_catalogs: Sequence[Path] | None = None,
 ):
     output_file = Path(output_path)
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -361,13 +535,106 @@ def save_observation_time_report(
         for name in target_list.get("Planet Name", pd.Series(dtype=object)).dropna()
     }
 
+    requested_hours_by_target: dict[str, float] = {}
+    requested_hours_sources_by_target: dict[str, set[str]] = {}
+    if requested_hours_catalogs:
+        for catalog_path in requested_hours_catalogs:
+            path = Path(catalog_path)
+            if not path.exists():
+                raise FileNotFoundError(f"Requested-hours catalog missing: {path}")
+            try:
+                df = pd.read_csv(path)
+            except EmptyDataError:
+                # Treat a truly empty file as an empty catalog.
+                continue
+            if df.empty:
+                continue
+            if "Star Name" not in df.columns:
+                raise ValueError(
+                    f"Requested-hours catalog is missing 'Star Name' column: {path}"
+                )
+            if "Number of Hours Requested" not in df.columns:
+                raise ValueError(
+                    "Requested-hours catalog is missing 'Number of Hours Requested' "
+                    f"column: {path}"
+                )
+
+            for _, row in df.iterrows():
+                name = row.get("Star Name")
+                if pd.isna(name):
+                    continue
+                key = str(name)
+
+                requested_hours_sources_by_target.setdefault(key, set()).add(path.name)
+
+                hours_req = row.get("Number of Hours Requested")
+                if pd.isna(hours_req):
+                    continue
+                try:
+                    value = float(hours_req)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"Invalid 'Number of Hours Requested' for {key!r} in {path}: {hours_req!r}"
+                    ) from exc
+
+                if (
+                    key in requested_hours_by_target
+                    and requested_hours_by_target[key] != value
+                ):
+                    chosen = max(requested_hours_by_target[key], value)
+                    LOGGER.warning(
+                        "Conflicting 'Number of Hours Requested' values for %r: %.2f vs %.2f; "
+                        "using %.2f",
+                        key,
+                        requested_hours_by_target[key],
+                        value,
+                        chosen,
+                    )
+                    requested_hours_by_target[key] = chosen
+                else:
+                    requested_hours_by_target[key] = value
+
+        # Overlap is usually a data issue (e.g., a target appears in both auxiliary and occultation lists).
+        # Warn so users can fix upstream catalogs, but do not fail the pipeline.
+        for target_name, source_names in requested_hours_sources_by_target.items():
+            if len(source_names) > 1:
+                sources_str = ", ".join(sorted(source_names))
+                LOGGER.warning(
+                    "Target %r appears in multiple requested-hours catalogs: %s",
+                    target_name,
+                    sources_str,
+                )
+
     with output_file.open("w", encoding="utf-8") as handle:
-        handle.write("Target,Is Primary,Total Observation Time (hours)\n")
+        handle.write("Target,Is Primary,Hours Requested,Hours Scheduled,Hours Delta\n")
         for target, duration in all_target_obs_time.items():
             label = str(target)
             is_primary = "Yes" if label in primary_targets else "No"
             hours = duration.total_seconds() / 3600
-            handle.write(f"{label},{is_primary},{hours:.2f}\n")
+
+            if is_primary == "Yes":
+                handle.write(f"{label},{is_primary},,{hours:.2f},\n")
+                continue
+
+            if label == "STD" or label.endswith(" STD"):
+                handle.write(f"{label},{is_primary},,{hours:.2f},\n")
+                continue
+
+            if not requested_hours_catalogs:
+                raise ValueError(
+                    "Cannot report requested-vs-scheduled hours: "
+                    "requested_hours_catalogs not provided"
+                )
+
+            if label not in requested_hours_by_target:
+                raise ValueError(
+                    f"Missing 'Number of Hours Requested' for non-primary target {label!r}"
+                )
+            requested = requested_hours_by_target[label]
+            delta = hours - requested
+            handle.write(
+                f"{label},{is_primary},{requested:.2f},{hours:.2f},{delta:.2f}\n"
+            )
 
     return output_file
 
@@ -382,10 +649,13 @@ def check_if_transits_in_obs_window(
     sched_start: datetime,
     sched_stop: datetime,
     obs_rng: pd.DatetimeIndex,
-    obs_window: timedelta,
     transit_scheduling_weights: Sequence[float],
     transit_coverage_min: float,
     targets_dir: Path,
+    *,
+    short_visit_threshold_hours: float = 12.0,
+    short_visit_edge_buffer_hours: float = 1.5,
+    long_visit_edge_buffer_hours: float = 4.0,
 ):
 
     result_df = temp_df.copy()
@@ -395,6 +665,7 @@ def check_if_transits_in_obs_window(
         "DEC",
         "Obs Start",
         "Obs Gap Time",
+        "Visit Duration",
         "Transit Coverage",
         "SAA Overlap",
         "Schedule Factor",
@@ -424,19 +695,29 @@ def check_if_transits_in_obs_window(
             continue
 
         star_name = str(planet_lookup.loc[planet_name, "Star Name"])
-        
+
         try:
-            visibility_file = _planet_visibility_file(targets_dir, star_name, str(planet_name))
+            visibility_file = require_planet_visibility_file(
+                targets_dir, star_name, str(planet_name)
+            )
         except FileNotFoundError as e:
             LOGGER.error(str(e))
             raise
 
-        planet_data = read_parquet_cached(str(visibility_file))
+        planet_data = read_parquet_cached(
+            str(visibility_file),
+            columns=[
+                "Transit_Start",
+                "Transit_Stop",
+                "Transit_Coverage",
+                "SAA_Overlap",
+            ],
+        )
         if planet_data is None:
             raise ValueError(
                 f"Planet visibility file exists but is unreadable: {visibility_file}"
             )
-        
+
         # Skip planets with no transits in the scheduling window (valid case)
         if planet_data.empty:
             continue
@@ -477,8 +758,41 @@ def check_if_transits_in_obs_window(
         start_series = start_series.dt.floor("min")
         stop_series = stop_series.dt.floor("min")
 
-        early_start = stop_series - timedelta(hours=20)
-        late_start = start_series - timedelta(hours=4)
+        # Get per-target visit duration and compute edge buffer
+        visit_duration = get_target_visit_duration(str(planet_name), target_list)
+        edge_buffer = compute_edge_buffer(
+            visit_duration,
+            short_visit_threshold_hours,
+            short_visit_edge_buffer_hours,
+            long_visit_edge_buffer_hours,
+        )
+
+        # Validate that transits can be scheduled with the required edge buffers
+        # Use the first transit as representative (they should all have similar duration)
+        if len(start_series) > 0 and len(stop_series) > 0:
+            sample_transit_duration = stop_series.iloc[0] - start_series.iloc[0]
+            try:
+                validate_transit_schedulable(
+                    str(planet_name),
+                    sample_transit_duration,
+                    visit_duration,
+                    edge_buffer,
+                )
+            except TransitUnschedulableError as e:
+                LOGGER.error(str(e))
+                raise
+
+        # Compute earliest and latest valid start times for each transit
+        early_start_list = []
+        late_start_list = []
+        for ts, te in zip(start_series, stop_series):
+            earliest, latest = compute_transit_start_bounds(
+                ts, te, visit_duration, edge_buffer
+            )
+            early_start_list.append(earliest)
+            late_start_list.append(latest)
+        early_start = pd.Series(early_start_list)
+        late_start = pd.Series(late_start_list)
 
         try:
             ra_tar = float(row["RA"])
@@ -507,7 +821,8 @@ def check_if_transits_in_obs_window(
 
             obs_start = overlap_times[0]
             gap_time = obs_start - obs_rng[0]
-            schedule_factor = 1 - (gap_time / obs_window)
+            # Use per-target visit duration for schedule factor normalization
+            schedule_factor = 1 - (gap_time / visit_duration)
             transit_coverage = float(coverage_values[j])
             saa_overlap = float(saa_values[j])
             quality_factor = (
@@ -524,6 +839,7 @@ def check_if_transits_in_obs_window(
                         dec_tar,
                         obs_start,
                         gap_time,
+                        visit_duration,
                         transit_coverage,
                         saa_overlap,
                         schedule_factor,
@@ -558,7 +874,7 @@ def process_target_files(keyword: str, *, base_path: Path) -> pd.DataFrame:
 
 
 def create_aux_list(target_definition_files: Sequence[str], package_dir):
-    """Build ``aux_list_new.csv`` from the provided target manifest CSVs.
+    """Build ``all_targets.csv`` from the provided target manifest CSVs.
 
     The legacy helper concatenated the partner target lists that share a common
     column set.  Reimplement the same behaviour explicitly to avoid importing
@@ -579,7 +895,7 @@ def create_aux_list(target_definition_files: Sequence[str], package_dir):
 
     if not csv_paths:
         raise FileNotFoundError(
-            "No target definition CSVs found; unable to build aux_list_new.csv"
+            "No target definition CSVs found; unable to build all_targets.csv"
         )
 
     dataframes = [pd.read_csv(path) for path in csv_paths]
@@ -600,71 +916,7 @@ def create_aux_list(target_definition_files: Sequence[str], package_dir):
         pd.concat(trimmed, ignore_index=True).drop_duplicates().reset_index(drop=True)
     )
 
-    output_path = data_dir / "aux_list_new.csv"
+    output_path = data_dir / "all_targets.csv"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     combined.to_csv(output_path, index=False)
-
     return output_path
-
-
-# Regex pattern moved to utils.string_ops
-
-
-# Path building functions moved to utils.io (imported above)
-
-
-# remove_suffix moved to utils.string_ops (imported above)
-
-
-@functools.lru_cache(maxsize=32)
-def _load_visibility_data(file_path: Path) -> tuple[np.ndarray, np.ndarray]:
-    """Load and cache visibility data from parquet or CSV file.
-
-    This function is cached to avoid repeatedly reading the same file
-    when scheduling multiple observation windows for the same target.
-    Cache size is limited to 32 files (~256 MB memory) to balance
-    performance with memory usage.
-
-    Parameters
-    ----------
-    file_path
-        Path to the visibility file (parquet or CSV).
-
-    Returns
-    -------
-    tuple[np.ndarray, np.ndarray]
-        Time array (MJD_UTC) and visibility flags.
-    """
-    if file_path.suffix == ".csv":
-        vis = pd.read_csv(file_path, usecols=["Time(MJD_UTC)", "Visible"])
-    else:
-        vis = pd.read_parquet(file_path, columns=["Time(MJD_UTC)", "Visible"])
-    return vis["Time(MJD_UTC)"].to_numpy(), vis["Visible"].to_numpy()
-
-
-def _resolve_visibility_file(target_name: str, base_path: Path | None) -> Path | None:
-    """Find visibility file for a target in the given base path.
-    
-    The base_path should be the directory containing target subdirectories,
-    e.g., 'data/aux_targets' or 'data/targets'.
-    """
-    if base_path is None:
-        return None
-
-    candidate = build_star_visibility_path(base_path, target_name)
-    if candidate.is_file():
-        return candidate
-
-    return None
-
-
-def _planet_visibility_file(targets_dir: Path, star_name: str, planet_name: str) -> Path:
-    """Find planet visibility file, raising error if not found."""
-    candidate = build_visibility_path(targets_dir, star_name, planet_name)
-    if not candidate.is_file():
-        raise FileNotFoundError(
-            f"Planet visibility file not found: {candidate}\n"
-            f"  Star: {star_name}, Planet: {planet_name}\n"
-            f"  Expected path: {candidate}"
-        )
-    return candidate

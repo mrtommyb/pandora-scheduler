@@ -5,9 +5,11 @@ Memory profiling script for visibility data caching analysis.
 Analyzes the size and count of visibility files to determine safe cache limits.
 """
 
-from pathlib import Path
-import pandas as pd
 import sys
+from pathlib import Path
+
+import pandas as pd
+
 
 def analyze_visibility_files(data_dir: Path):
     """Analyze all visibility files in the data directory."""

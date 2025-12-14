@@ -44,6 +44,9 @@ class TargetDefinitionError(RuntimeError):
     """Raised when target definition assets are missing or inconsistent."""
 
 
+_PLACEHOLDER_MARKERS = {"SET_BY_TARGET_DEFINITION_FILE", "SET_BY_SCHEDULER"}
+
+
 @dataclass(frozen=True)
 class _ReadoutSchemes:
     nirda_fixed: Mapping[str, object]
@@ -91,6 +94,8 @@ def build_target_manifest(
     for json_path in sorted(category_dir.glob("*_target_definition.json")):
         row = _load_target_definition(json_path)
         row["Original Filename"] = json_path.name.replace("_target_definition.json", "")
+
+        _validate_required_target_fields(row, category)
 
         _apply_priority(row, category, priority_table)
         _apply_identity_columns(row, category)
@@ -236,11 +241,17 @@ def _apply_priority(
                 f"Target '{filename}' not present in {category} priority table"
             )
         row["Priority"] = float(match["priority"].iloc[0])
-        # Only add Number of Hours Requested for non-occultation standard categories
-        if category != _OCCULTATION_CATEGORY:
-            row["Number of Hours Requested"] = int(
-                round(float(match["hours_req"].iloc[0]))
+        # Add Number of Hours Requested from priority table (required for standard categories)
+        if "hours_req" not in match.columns:
+            raise TargetDefinitionError(
+                f"Priority table for category '{category}' is missing required 'hours_req' column"
             )
+        hours_req_value = match["hours_req"].iloc[0]
+        if pd.isna(hours_req_value):
+            raise TargetDefinitionError(
+                f"Target '{filename}' in {category} has missing 'hours_req' value"
+            )
+        row["Number of Hours Requested"] = int(round(float(hours_req_value)))
     else:
         raise TargetDefinitionError(f"Unsupported target category '{category}'")
 
@@ -283,21 +294,83 @@ def _apply_readout_settings(
         row[f"NIRDA_{key}"] = value
 
     nirda_setting = row.get("NIRDA Setting")
-    if isinstance(nirda_setting, str):
-        scheme = readouts.nirda_schemes.get(nirda_setting)
-        if scheme is not None:
-            for key, value in scheme.items():
-                row[f"NIRDA_{key}"] = value
+    if not isinstance(nirda_setting, str) or not nirda_setting.strip():
+        raise TargetDefinitionError(
+            "Missing required 'NIRDA Setting' for target definition "
+            f"'{row.get('Original Filename', '')}'"
+        )
+    scheme = readouts.nirda_schemes.get(nirda_setting)
+    if scheme is None:
+        raise TargetDefinitionError(
+            "Unknown NIRDA Setting for target definition "
+            f"'{row.get('Original Filename', '')}': {nirda_setting!r}"
+        )
+    for key, value in scheme.items():
+        row[f"NIRDA_{key}"] = value
 
     for key, value in readouts.vda_fixed.items():
         row[f"VDA_{key}"] = value
 
     vda_setting = row.get("VDA Setting")
-    if isinstance(vda_setting, str):
-        scheme = readouts.vda_schemes.get(vda_setting)
-        if scheme is not None:
-            for key, value in scheme.items():
-                row[f"VDA_{key}"] = value
+    if not isinstance(vda_setting, str) or not vda_setting.strip():
+        raise TargetDefinitionError(
+            "Missing required 'VDA Setting' for target definition "
+            f"'{row.get('Original Filename', '')}'"
+        )
+    scheme = readouts.vda_schemes.get(vda_setting)
+    if scheme is None:
+        raise TargetDefinitionError(
+            "Unknown VDA Setting for target definition "
+            f"'{row.get('Original Filename', '')}': {vda_setting!r}"
+        )
+    for key, value in scheme.items():
+        row[f"VDA_{key}"] = value
+
+
+def _validate_required_target_fields(row: Mapping[str, object], category: str) -> None:
+    """Validate required fields are present in the target definition JSON.
+
+    Policy: we require StarRoiDetMethod and explicit readout scheme names.
+    The readout scheme values are validated later (against scheme files) in
+    _apply_readout_settings; here we enforce presence and basic shape.
+    """
+    filename = str(row.get("Original Filename", "") or "")
+
+    for key in ("NIRDA Setting", "VDA Setting"):
+        value = row.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise TargetDefinitionError(
+                f"Target '{filename}' is missing required '{key}'"
+            )
+
+    star_roi = row.get("StarRoiDetMethod")
+    if star_roi is None or (isinstance(star_roi, float) and pd.isna(star_roi)):
+        raise TargetDefinitionError(
+            f"Target '{filename}' is missing required 'StarRoiDetMethod'"
+        )
+    if isinstance(star_roi, str):
+        if not star_roi.strip() or star_roi.strip() in _PLACEHOLDER_MARKERS:
+            raise TargetDefinitionError(
+                f"Target '{filename}' has unresolved 'StarRoiDetMethod': {star_roi!r}"
+            )
+        try:
+            star_roi_int = int(star_roi)
+        except ValueError as exc:
+            raise TargetDefinitionError(
+                f"Target '{filename}' has invalid 'StarRoiDetMethod': {star_roi!r}"
+            ) from exc
+    else:
+        try:
+            star_roi_int = int(star_roi)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise TargetDefinitionError(
+                f"Target '{filename}' has invalid 'StarRoiDetMethod': {star_roi!r}"
+            ) from exc
+
+    if star_roi_int not in {1, 2}:
+        raise TargetDefinitionError(
+            f"Target '{filename}' has unsupported 'StarRoiDetMethod': {star_roi_int}"
+        )
 
 
 def _apply_proper_motion(

@@ -1,8 +1,11 @@
 
 import sys
 from pathlib import Path
+
 import pandas as pd
+
 from pandorascheduler_rework.pipeline import _generate_target_manifests
+
 
 def test_aux_list_generation():
     # Setup temporary directory structure
@@ -37,11 +40,11 @@ def test_aux_list_generation():
         print(f"Error during manifest generation: {e}")
         sys.exit(1)
 
-    # Check if aux_list_new.csv was created
-    aux_list_new = data_dir / "aux_list_new.csv"
-    if aux_list_new.exists():
-        print(f"SUCCESS: {aux_list_new} was generated.")
-        df = pd.read_csv(aux_list_new)
+    # Check if all_targets.csv was created
+    all_targets = data_dir / "all_targets.csv"
+    if all_targets.exists():
+        print(f"SUCCESS: {all_targets} was generated.")
+        df = pd.read_csv(all_targets)
         print(f"File contains {len(df)} rows.")
         # Verify content - should contain combined targets
         if len(df) > 0:
@@ -49,7 +52,7 @@ def test_aux_list_generation():
         else:
              print("WARNING: File is empty.")
     else:
-        print(f"FAILURE: {aux_list_new} was NOT generated.")
+        print(f"FAILURE: {all_targets} was NOT generated.")
         sys.exit(1)
 
 if __name__ == "__main__":

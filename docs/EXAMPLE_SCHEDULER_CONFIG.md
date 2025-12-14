@@ -16,7 +16,7 @@ Scope
 - The keys below correspond to the fields on `PandoraSchedulerConfig` (see `src/pandorascheduler_rework/config.py`). Default values shown are the library defaults used when keys are omitted.
 
 Timing & window
-- `obs_window_hours` (float, default `24.0`): length in hours of the observation window used by the scheduler.
+- `schedule_step_hours` (float, default `24.0`): scheduler rolling window step size in hours.
 - `commissioning_days` (int, default `0`): number of commissioning days at mission start.
 
 Paths & data sources
@@ -26,8 +26,11 @@ Paths & data sources
 Scheduling thresholds
 - `transit_coverage_min` (float 0-1, default `0.2`): minimum transit coverage to consider scheduling.
 - `min_visibility` (float, default `0.0`): minimum visibility fraction for considering a window.
-- `deprioritization_limit_hours` (float, default `48.0`): hours of exposure after which auxiliary targets may be deprioritized.
-- `saa_overlap_threshold` (float, default `0.0`): allowed South Atlantic Anomaly overlap fraction.
+
+Auxiliary requested-time behavior
+- Auxiliary/standard targets are capped using the per-target `Number of Hours Requested` values from the target manifests (rather than a global config threshold).
+- If no eligible non-primary targets are visible in a window, the scheduler will fall back to scheduling a target that has already met its requested hours and will emit warnings when this occurs.
+- The Observation Time Report uses the same `Number of Hours Requested` values to compute requested-vs-scheduled deltas for non-primary targets.
 
 Weighting factors
 - `transit_scheduling_weights` (array of 3 floats, default `[0.8, 0.0, 0.2]`): tuple representing (coverage, saa, schedule) weights. Must sum to 1.0.
@@ -46,6 +49,7 @@ XML generation parameters
 Standard star observations
 - `std_obs_duration_hours` (float, default `0.5`)
 - `std_obs_frequency_days` (float, default `3.0`)
+- If no standard star is fully visible during the standard-star observation window, the scheduler logs a warning.
 
 Behavior flags
 - `show_progress` (bool, default `false`): show progress bars during processing.

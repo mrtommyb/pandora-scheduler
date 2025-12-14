@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
-from astropy.time import Time
-import xml.etree.ElementTree as ET
 import pytest
+from astropy.time import Time
 
 from pandorascheduler_rework import science_calendar
 from pandorascheduler_rework.config import PandoraSchedulerConfig
@@ -71,11 +71,11 @@ def test_generate_science_calendar_with_occultation(tmp_path, monkeypatch):
                 "DEC": 15.0,
             }
         ]
-    ).to_csv(data_dir / "aux_list_new.csv", index=False)
+    ).to_csv(data_dir / "all_targets.csv", index=False)
 
     pd.DataFrame(
         [
-            {"Star Name": "OccStar", "RA": 30.0, "DEC": 10.0}
+            {"Star Name": "OccStar", "RA": 30.0, "DEC": 10.0, "Number of Hours Requested": 600}
         ]
     ).to_csv(data_dir / "occultation-standard_targets.csv", index=False)
 
@@ -196,8 +196,8 @@ def test_generate_science_calendar_splits_long_occultations(tmp_path, monkeypatc
 
     pd.DataFrame(
         [
-            {"Star Name": "OccA", "RA": 30.0, "DEC": 10.0},
-            {"Star Name": "OccB", "RA": 35.0, "DEC": 12.0},
+            {"Star Name": "OccA", "RA": 30.0, "DEC": 10.0, "Number of Hours Requested": 600},
+            {"Star Name": "OccB", "RA": 35.0, "DEC": 12.0, "Number of Hours Requested": 600},
         ]
     ).to_csv(data_dir / "occultation-standard_targets.csv", index=False)
 
@@ -206,7 +206,7 @@ def test_generate_science_calendar_splits_long_occultations(tmp_path, monkeypatc
             {"Star Name": "OccA", "RA": 30.0, "DEC": 10.0},
             {"Star Name": "OccB", "RA": 35.0, "DEC": 12.0},
         ]
-    ).to_csv(data_dir / "aux_list_new.csv", index=False)
+    ).to_csv(data_dir / "all_targets.csv", index=False)
 
     schedule_df = pd.DataFrame(
         [
@@ -309,12 +309,12 @@ def test_visit_id_formatting_matches_legacy_quirk(tmp_path, monkeypatch):
     _write_visibility(data_dir / "aux_targets" / "TestStar", "TestStar", times, [1] * len(times))
 
     pd.DataFrame([{"Star Name": "TestStar", "RA": 10.0, "DEC": -20.0}]).to_csv(
-        data_dir / "aux_list_new.csv", index=False
+        data_dir / "all_targets.csv", index=False
     )
     pd.DataFrame([{"Star Name": "TestStar", "RA": 10.0, "DEC": -20.0}]).to_csv(
         data_dir / "exoplanet_targets.csv", index=False
     )
-    pd.DataFrame([{"Star Name": "TestStar", "RA": 10.0, "DEC": -20.0}]).to_csv(
+    pd.DataFrame([{"Star Name": "TestStar", "RA": 10.0, "DEC": -20.0, "Number of Hours Requested": 600}]).to_csv(
         data_dir / "occultation-standard_targets.csv", index=False
     )
 
@@ -483,7 +483,7 @@ def test_calendar_sequences_below_minimum(tmp_path, monkeypatch):
         data_dir / "exoplanet_targets.csv", index=False
     )
     pd.DataFrame(columns=["Star Name", "RA", "DEC"]).to_csv(
-        data_dir / "aux_list_new.csv", index=False
+        data_dir / "all_targets.csv", index=False
     )
     pd.DataFrame(columns=["Star Name", "RA", "DEC"]).to_csv(
         data_dir / "occultation-standard_targets.csv", index=False
@@ -568,7 +568,7 @@ def test_datetime_rounding_to_nearest_second(tmp_path, monkeypatch):
         data_dir / "exoplanet_targets.csv", index=False
     )
     pd.DataFrame(columns=["Star Name", "RA", "DEC"]).to_csv(
-        data_dir / "aux_list_new.csv", index=False
+        data_dir / "all_targets.csv", index=False
     )
     pd.DataFrame(columns=["Star Name", "RA", "DEC"]).to_csv(
         data_dir / "occultation-standard_targets.csv", index=False

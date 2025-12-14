@@ -1,14 +1,15 @@
 """Tests for parameter propagation from PandoraSchedulerConfig to components."""
 
-import pytest
 from datetime import datetime
 from pathlib import Path
+
 import pandas as pd
+import pytest
 
 from pandorascheduler_rework.config import PandoraSchedulerConfig
 from pandorascheduler_rework.science_calendar import (
-    generate_science_calendar,
     ScienceCalendarInputs,
+    generate_science_calendar,
 )
 from pandorascheduler_rework.visibility.catalog import build_visibility_catalog
 
@@ -49,13 +50,11 @@ class TestConfigParameterPropagation:
             window_start=datetime(2026, 1, 1),
             window_end=datetime(2026, 1, 2),
             transit_coverage_min=0.35,  # Non-default
-            deprioritization_limit_hours=48.0,  # Non-default
             aux_sort_key="closest",  # Non-default
         )
         
         # Verify config has the parameters we set
         assert config.transit_coverage_min == 0.35
-        assert config.deprioritization_limit_hours == 48.0
         assert config.aux_sort_key == "closest"
     
     def test_science_calendar_receives_config_parameters(self, tmp_path):
@@ -92,7 +91,7 @@ class TestConfigParameterPropagation:
         )
         # Create auxiliary catalogs expected by the calendar builder
         pd.DataFrame([{"Star Name": "Test", "RA": 0, "DEC": 0}]).to_csv(
-            data_dir / "aux_list_new.csv", index=False
+            data_dir / "all_targets.csv", index=False
         )
         pd.DataFrame([{"Star Name": "Test", "RA": 0, "DEC": 0}]).to_csv(
             data_dir / "occultation-standard_targets.csv", index=False

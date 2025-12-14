@@ -1,13 +1,14 @@
 """Unit tests for the XML module."""
 
-from datetime import datetime
 import xml.etree.ElementTree as ET
+from datetime import datetime
+
 import pandas as pd
 
 from pandorascheduler_rework.xml.builder import (
-    observation_sequence,
     _build_observational_parameters,
     _duration_in_seconds,
+    observation_sequence,
 )
 from pandorascheduler_rework.xml.parameters import (
     populate_nirda_parameters,

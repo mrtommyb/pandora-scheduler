@@ -10,8 +10,9 @@ Analyzes differences between legacy and rework XMLs, focusing on:
 """
 
 import xml.etree.ElementTree as ET
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
+
 
 def parse_xml(xml_path):
     """Parse XML and extract visit information."""

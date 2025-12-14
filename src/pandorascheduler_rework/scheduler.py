@@ -15,8 +15,13 @@ from astropy.time import Time
 from tqdm import tqdm
 
 from pandorascheduler_rework import observation_utils
-from pandorascheduler_rework.utils.io import read_csv_cached, read_parquet_cached
 from pandorascheduler_rework.config import PandoraSchedulerConfig
+from pandorascheduler_rework.utils.io import (
+    build_star_visibility_path,
+    build_visibility_path,
+    read_csv_cached,
+    read_parquet_cached,
+)
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -29,23 +34,23 @@ def _filter_visibility_by_time(
     use_legacy_mode: bool,
 ) -> pd.DataFrame:
     """Filter visibility data to a time window.
-    
+
     Args:
         vis: Visibility DataFrame with Time(MJD_UTC) and optionally Time_UTC columns
         start: Start of time window
         stop: End of time window
         use_legacy_mode: If True, use MJD-based filtering (matches legacy exactly).
                         If False, use datetime-based filtering (more precise at boundaries).
-    
+
     Returns:
         Filtered visibility DataFrame
-        
+
     Note:
         Legacy mode uses MJD filtering which can exclude boundary points due to
         floating-point precision. For example, if start converts to MJD 61079.6048611111
         but the data has 61079.6048610000, the row is excluded. Datetime filtering
         includes such boundary rows correctly.
-        
+
         The practical difference is typically 0-2 rows at window boundaries, which
         can affect visibility percentage calculations and thus target selection
         when multiple targets have similar visibility.
@@ -58,7 +63,19 @@ def _filter_visibility_by_time(
     else:
         # Modern: Datetime-based filtering (more precise at boundaries)
         if "Time_UTC" in vis.columns:
-            vis_times = pd.to_datetime(vis["Time_UTC"])
+            parsed_col = "_Time_UTC_dt64"
+            time_utc = vis["Time_UTC"]
+            if pd.api.types.is_datetime64_any_dtype(time_utc):
+                vis_times = time_utc
+            else:
+                if parsed_col in vis.columns and pd.api.types.is_datetime64_any_dtype(
+                    vis[parsed_col]
+                ):
+                    vis_times = vis[parsed_col]
+                else:
+                    # Parse once; store on the cached DataFrame to reuse in subsequent calls.
+                    vis[parsed_col] = pd.to_datetime(time_utc, errors="coerce")
+                    vis_times = vis[parsed_col]
         else:
             # Fallback to MJD conversion
             vis_times = Time(
@@ -66,7 +83,7 @@ def _filter_visibility_by_time(
             ).to_datetime()
             vis_times = pd.to_datetime(vis_times)
         mask = (vis_times >= start) & (vis_times <= stop)
-    
+
     return vis.loc[mask]
 
 
@@ -164,7 +181,7 @@ def run_scheduler(
     schedule_rows: list[pd.DataFrame] = []
 
     start = sched_start
-    stop = start + config.obs_window
+    stop = start + config.schedule_step
 
     progress_bar = None
     previous_start = start
@@ -208,6 +225,7 @@ def run_scheduler(
                     "Planet Name",
                     "Obs Start",
                     "Obs Gap Time",
+                    "Visit Duration",
                     "Transit Coverage",
                     "SAA Overlap",
                     "Schedule Factor",
@@ -223,10 +241,12 @@ def run_scheduler(
             sched_start,
             sched_stop,
             obs_range,
-            config.obs_window,
             list(config.transit_scheduling_weights),
             config.transit_coverage_min,
             inputs.paths.targets_dir,
+            short_visit_threshold_hours=config.short_visit_threshold_hours,
+            short_visit_edge_buffer_hours=config.short_visit_edge_buffer_hours,
+            long_visit_edge_buffer_hours=config.long_visit_edge_buffer_hours,
         )
 
         too_result = _handle_targets_of_opportunity(
@@ -246,7 +266,7 @@ def run_scheduler(
             if not too_df.empty:
                 schedule_rows.append(too_df)
             start = new_start
-            stop = start + config.obs_window
+            stop = start + config.schedule_step
             advance_progress(start)
             continue
 
@@ -262,7 +282,7 @@ def run_scheduler(
                 schedule_rows.append(aux_df)
             logger.info(f"{log_info}; window {start} to {stop}")
             start = stop
-            stop = start + config.obs_window
+            stop = start + config.schedule_step
             advance_progress(start)
             continue
 
@@ -276,7 +296,7 @@ def run_scheduler(
         )
         schedule_rows.append(scheduled_visit)
         start = scheduled_visit["Observation Stop"].iloc[-1]
-        stop = start + config.obs_window
+        stop = start + config.schedule_step
         advance_progress(start)
 
     schedule = (
@@ -381,12 +401,15 @@ def _initialize_tracker(
         planet_name = str(row["Planet Name"])
         star_name = str(row["Star Name"])
 
-        visibility_path = observation_utils.build_visibility_path(
+        visibility_path = build_visibility_path(
             inputs.paths.targets_dir, star_name, planet_name
         )
         planet_data = None
         try:
-            planet_data = read_parquet_cached(str(visibility_path))
+            planet_data = read_parquet_cached(
+                str(visibility_path),
+                columns=["Transit_Start", "Transit_Stop", "Transit_Coverage"],
+            )
         except Exception:
             planet_data = None
 
@@ -479,10 +502,18 @@ def _write_observation_report(
 ) -> Path:
     report_name = f"Observation_Time_Report_{pandora_start}.csv"
     report_path = inputs.output_dir / report_name
+    requested_hours_catalogs: list[Path] = []
+    # Prefer the canonical per-category manifests written to the output data dir.
+    for target_def in inputs.target_definition_files[1:]:
+        manifest_path = inputs.paths.data_dir / f"{target_def}_targets.csv"
+        if manifest_path.exists():
+            requested_hours_catalogs.append(manifest_path)
+
     observation_utils.save_observation_time_report(
         state.all_target_obs_time,
         inputs.target_list,
         str(report_path),
+        requested_hours_catalogs=requested_hours_catalogs,
     )
     return report_path
 
@@ -544,12 +575,11 @@ def _load_planet_transit_windows(
 ) -> dict[str, tuple[datetime, datetime]]:
     """Batch-load transit windows for multiple planets to avoid repeated CSV reads."""
     transit_windows = {}
-    
+
     # Build planet -> star name lookup from target list
-    planet_to_star = dict(zip(
-        inputs.target_list["Planet Name"],
-        inputs.target_list["Star Name"]
-    ))
+    planet_to_star = dict(
+        zip(inputs.target_list["Planet Name"], inputs.target_list["Star Name"])
+    )
 
     for planet_name in planet_names:
         planet_str = str(planet_name)
@@ -560,8 +590,8 @@ def _load_planet_transit_windows(
                 f"Cannot determine star name."
             )
         star_name = str(star_name)
-        
-        vis_path = observation_utils.build_visibility_path(
+
+        vis_path = build_visibility_path(
             inputs.paths.targets_dir, star_name, planet_str
         )
         if not vis_path.is_file():
@@ -570,15 +600,18 @@ def _load_planet_transit_windows(
                 f"  Planet: {planet_str}, Star: {star_name}\n"
                 f"  Expected at: {vis_path}"
             )
-        
-        planet_visibility = read_parquet_cached(str(vis_path))
-        
+
+        planet_visibility = read_parquet_cached(
+            str(vis_path),
+            columns=["Transit_Start", "Transit_Stop"],
+        )
+
         if planet_visibility is None:
             raise ValueError(
                 f"Planet visibility file exists but is unreadable: {vis_path}\n"
                 f"  Planet: {planet_str}, Star: {star_name}"
             )
-        
+
         # Skip planets with no transits in the scheduling window (valid case)
         if planet_visibility.empty or len(planet_visibility) == 0:
             continue
@@ -647,8 +680,24 @@ def _handle_targets_of_opportunity(
 
         start_transit, end_transit = transit_windows[planet_name]
 
-        early_start = end_transit - timedelta(hours=20)
-        late_start = start_transit - timedelta(hours=4)
+        # Use per-target visit duration and edge buffer for ToO overlap check
+        planet_name_str = str(planet_name)
+        visit_duration = observation_utils.get_target_visit_duration(
+            planet_name_str, inputs.target_list
+        )
+        edge_buffer = observation_utils.compute_edge_buffer(
+            visit_duration,
+            config.short_visit_threshold_hours,
+            config.short_visit_edge_buffer_hours,
+            config.long_visit_edge_buffer_hours,
+        )
+        early_start, late_start = observation_utils.compute_transit_start_bounds(
+            start_transit, end_transit, visit_duration, edge_buffer
+        )
+
+        # Skip if no valid start window
+        if early_start > late_start:
+            continue
 
         start_range = pd.date_range(early_start, late_start, freq="min")
         overlap_times = obs_range.intersection(start_range)
@@ -709,8 +758,24 @@ def _handle_targets_of_opportunity(
         tf_ratio = transit_ratio.loc[planet_name]
         start_transit, end_transit = transit_windows[planet_name]
 
-        early_start = end_transit - timedelta(hours=20)
-        late_start = start_transit - timedelta(hours=4)
+        # Use per-target visit duration and edge buffer
+        planet_name_str = str(planet_name)
+        visit_duration = observation_utils.get_target_visit_duration(
+            planet_name_str, inputs.target_list
+        )
+        edge_buffer = observation_utils.compute_edge_buffer(
+            visit_duration,
+            config.short_visit_threshold_hours,
+            config.short_visit_edge_buffer_hours,
+            config.long_visit_edge_buffer_hours,
+        )
+        early_start, late_start = observation_utils.compute_transit_start_bounds(
+            start_transit, end_transit, visit_duration, edge_buffer
+        )
+
+        # Skip if no valid start window
+        if early_start > late_start:
+            continue
 
         start_range = pd.date_range(early_start, late_start, freq="min")
         overlap_times = obs_range.intersection(start_range)
@@ -783,7 +848,7 @@ def _schedule_auxiliary_target(
         std_candidate: Optional[tuple[str, float, float, float]] = None
         for std_row in std_records:
             std_name = str(std_row["Star Name"])
-            vis_file = observation_utils.build_star_visibility_path(
+            vis_file = build_star_visibility_path(
                 inputs.paths.aux_targets_dir, std_name
             )
             if not vis_file.is_file():
@@ -792,8 +857,16 @@ def _schedule_auxiliary_target(
                     f"  Target: {std_name}\n"
                     f"  Expected at: {vis_file}"
                 )
-            
-            vis = read_parquet_cached(str(vis_file))
+
+            vis = read_parquet_cached(
+                str(vis_file),
+                columns=["Time(MJD_UTC)", "Time_UTC", "Visible"],
+            )
+            if vis is None:
+                vis = read_parquet_cached(
+                    str(vis_file),
+                    columns=["Time(MJD_UTC)", "Visible"],
+                )
 
             if vis is None or vis.empty or len(vis) == 0:
                 raise ValueError(
@@ -847,6 +920,33 @@ def _schedule_auxiliary_target(
         stats.total_time += obs_std_duration
         stats.last_priority = priority_std
 
+    # Check if remaining window after STD is too short for auxiliary observation
+    remaining_minutes = (stop - active_start).total_seconds() / 60.0
+    if remaining_minutes <= config.min_sequence_minutes:
+        logger.info(
+            "Remaining window after STD too short (%.1f min <= %d min); "
+            "marking as Free Time from %s to %s",
+            remaining_minutes,
+            config.min_sequence_minutes,
+            active_start,
+            stop,
+        )
+        scheduled_rows.append(
+            ["Free Time", active_start, stop, float("nan"), float("nan")]
+        )
+        result = pd.DataFrame(scheduled_rows, columns=row_columns)
+        for record in result.to_dict(orient="records"):
+            target_label = str(record["Target"])
+            if target_label == "Free Time":
+                continue
+            duration = record["Observation Stop"] - record["Observation Start"]
+            if isinstance(duration, pd.Timedelta):
+                duration = duration.to_pytimedelta()
+            state.all_target_obs_time[target_label] = (
+                state.all_target_obs_time.get(target_label, timedelta()) + duration
+            )
+        return result, "Free time after STD, remaining window too short."
+
     if config.aux_sort_key is None:
         scheduled_rows.append(
             ["Free Time", active_start, stop, float("nan"), float("nan")]
@@ -866,136 +966,212 @@ def _schedule_auxiliary_target(
 
     selected_row: Optional[list] = None
     priority_val = 0.0
-    priority_baseline = 0.0
     log_info = "No fuly or partially visible non-primary targets, Free Time..."
-
-    deprioritization_limit = timedelta(hours=config.deprioritization_limit_hours)
+    selected_requested_hours: float | None = None
+    selected_observed_hours: float | None = None
+    fallback_over_requested_used = False
     non_primary_priorities = {
         name: stats.last_priority
         for name, stats in state.non_primary_obs_time.items()
         if not name.endswith("STD")
     }
 
-    for target_def in inputs.target_definition_files[1:]:
-        aux_csv = inputs.paths.data_dir / f"{target_def}_targets.csv"
-        if not aux_csv.exists():
-            continue
-
-        aux_targets = read_csv_cached(str(aux_csv))
-        if aux_targets is None:
-            continue
-        aux_targets = aux_targets.reset_index(drop=True)
-
-        mask = aux_targets["Star Name"].isin(non_primary_priorities.keys())
-        if mask.any():
-            mapped_priorities = aux_targets.loc[mask, "Star Name"].apply(
-                lambda value: non_primary_priorities.get(str(value), np.nan)
-            )
-            aux_targets.loc[mask, "Priority"] = mapped_priorities
-
-        if config.aux_sort_key in {"sort_by_tdf_priority", "closest"}:
-            aux_targets = aux_targets.sort_values(
-                "Priority", ascending=False, ignore_index=True
-            )
-        names = aux_targets["Star Name"].tolist()
-        ras = aux_targets["RA"].tolist()
-        decs = aux_targets["DEC"].tolist()
-        priorities = aux_targets["Priority"].tolist()
-
-        vis_all: list[int] = []
-        vis_any: list[int] = []
-        vis_percentages: list[float] = []
-
-        for idx, name in enumerate(names):
-            vis_file = observation_utils.build_star_visibility_path(
-                inputs.paths.aux_targets_dir, name
-            )
-            if not vis_file.is_file():
-                raise FileNotFoundError(
-                    f"Auxiliary target visibility file not found: {vis_file}\n"
-                    f"  Target: {name}\n"
-                    f"  Expected at: {vis_file}"
-                )
-            
-            vis = read_parquet_cached(str(vis_file))
-
-            if vis is None or vis.empty or len(vis) == 0:
-                raise ValueError(
-                    f"Auxiliary target visibility file exists but is empty: {vis_file}\n"
-                    f"  Target: {name}"
-                )
-
-            vis_filtered = _filter_visibility_by_time(
-                vis,
+    for allow_over_requested in (False, True):
+        if selected_row is not None:
+            break
+        if allow_over_requested:
+            logger.warning(
+                "No eligible non-primary targets visible between %s and %s; "
+                "allowing targets that have met requested hours",
                 active_start,
                 stop,
-                use_legacy_mode=config.use_legacy_mode,
             )
 
-            if not vis_filtered.empty and vis_filtered["Visible"].all():
-                vis_all.append(idx)
-                break
-            if not vis_filtered.empty and vis_filtered["Visible"].any():
-                vis_any.append(idx)
-                visibility = 100 * (vis_filtered["Visible"].sum() / len(vis_filtered))
-                vis_percentages.append(visibility)
+        for target_def in inputs.target_definition_files[1:]:
+            aux_csv = inputs.paths.data_dir / f"{target_def}_targets.csv"
+            if not aux_csv.exists():
+                continue
 
-        if vis_all:
+            aux_targets = read_csv_cached(str(aux_csv))
+            if aux_targets is None:
+                continue
+            aux_targets = aux_targets.reset_index(drop=True)
+
+            if "Number of Hours Requested" not in aux_targets.columns:
+                raise ValueError(
+                    "Auxiliary targets catalog is missing required 'Number of Hours Requested' "
+                    f"column: {aux_csv}"
+                )
+
+            requested_hours = pd.to_numeric(
+                aux_targets["Number of Hours Requested"], errors="coerce"
+            )
+            if requested_hours.isna().any():
+                bad = (
+                    aux_targets.loc[requested_hours.isna(), "Star Name"]
+                    .astype(str)
+                    .head(10)
+                    .tolist()
+                )
+                raise ValueError(
+                    "Invalid 'Number of Hours Requested' values in auxiliary targets catalog "
+                    f"{aux_csv}; examples: {bad}"
+                )
+            if (requested_hours <= 0).any():
+                bad = (
+                    aux_targets.loc[
+                        requested_hours <= 0, ["Star Name", "Number of Hours Requested"]
+                    ]
+                    .head(10)
+                    .to_dict(orient="records")
+                )
+                raise ValueError(
+                    "Non-positive 'Number of Hours Requested' values in auxiliary targets catalog "
+                    f"{aux_csv}; examples: {bad}"
+                )
+
+            aux_targets = aux_targets.assign(_requested_hours=requested_hours)
+            aux_targets = aux_targets.assign(
+                _observed_hours=aux_targets["Star Name"]
+                .astype(str)
+                .map(
+                    lambda label: (
+                        state.non_primary_obs_time.get(
+                            str(label)
+                        ).total_time.total_seconds()
+                        / 3600.0
+                        if state.non_primary_obs_time.get(str(label)) is not None
+                        else 0.0
+                    )
+                )
+            )
+            if not allow_over_requested:
+                eligible = (
+                    aux_targets["_observed_hours"] < aux_targets["_requested_hours"]
+                )
+                aux_targets = aux_targets.loc[eligible].reset_index(drop=True)
+
+            if aux_targets.empty:
+                continue
+
+            mask = aux_targets["Star Name"].isin(non_primary_priorities.keys())
+            if mask.any():
+                mapped_priorities = aux_targets.loc[mask, "Star Name"].apply(
+                    lambda value: non_primary_priorities.get(str(value), np.nan)
+                )
+                aux_targets.loc[mask, "Priority"] = mapped_priorities
+
             if config.aux_sort_key in {"sort_by_tdf_priority", "closest"}:
-                chosen_idx = vis_all[0]
-            else:
-                chosen_idx = int(np.random.randint(0, len(vis_all)))
+                aux_targets = aux_targets.sort_values(
+                    "Priority", ascending=False, ignore_index=True
+                )
+            names = aux_targets["Star Name"].tolist()
+            ras = aux_targets["RA"].tolist()
+            decs = aux_targets["DEC"].tolist()
+            priorities = aux_targets["Priority"].tolist()
+
+            vis_all: list[int] = []
+            vis_any: list[int] = []
+            vis_percentages: list[float] = []
+
+            for idx, name in enumerate(names):
+                vis_file = build_star_visibility_path(
+                    inputs.paths.aux_targets_dir, name
+                )
+                if not vis_file.is_file():
+                    raise FileNotFoundError(
+                        f"Auxiliary target visibility file not found: {vis_file}\n"
+                        f"  Target: {name}\n"
+                        f"  Expected at: {vis_file}"
+                    )
+
+                vis = read_parquet_cached(
+                    str(vis_file),
+                    columns=["Time(MJD_UTC)", "Time_UTC", "Visible"],
+                )
+                if vis is None:
+                    vis = read_parquet_cached(
+                        str(vis_file),
+                        columns=["Time(MJD_UTC)", "Visible"],
+                    )
+
+                if vis is None or vis.empty or len(vis) == 0:
+                    raise ValueError(
+                        f"Auxiliary target visibility file exists but is empty: {vis_file}\n"
+                        f"  Target: {name}"
+                    )
+
+                vis_filtered = _filter_visibility_by_time(
+                    vis,
+                    active_start,
+                    stop,
+                    use_legacy_mode=config.use_legacy_mode,
+                )
+
+                if not vis_filtered.empty and vis_filtered["Visible"].all():
+                    vis_all.append(idx)
+                    break
+                if not vis_filtered.empty and vis_filtered["Visible"].any():
+                    vis_any.append(idx)
+                    visibility = 100 * (
+                        vis_filtered["Visible"].sum() / len(vis_filtered)
+                    )
+                    vis_percentages.append(visibility)
+
+            chosen_idx: int | None = None
+            best_visibility: float | None = None
+
+            if vis_all:
+                if config.aux_sort_key in {"sort_by_tdf_priority", "closest"}:
+                    chosen_idx = vis_all[0]
+                else:
+                    chosen_idx = int(np.random.randint(0, len(vis_all)))
+                best_visibility = 100.0
+            elif vis_any:
+                any_idx = int(np.asarray(vis_percentages).argmax())
+                best_visibility = vis_percentages[any_idx]
+                if best_visibility >= 100 * config.min_visibility:
+                    chosen_idx = vis_any[any_idx]
+                else:
+                    logger.warning(
+                        "No non-primary target with visibility greater than %.2f%% from %s",
+                        100 * config.min_visibility,
+                        target_def,
+                    )
+
+            if chosen_idx is None:
+                continue
+
             name = names[chosen_idx]
             ra_val = ras[chosen_idx]
             dec_val = decs[chosen_idx]
             priority_val = priorities[chosen_idx]
-            log_info = (
-                f"{name} scheduled for non-primary observation with full visibility."
+            selected_requested_hours = float(
+                aux_targets.loc[chosen_idx, "_requested_hours"]
             )
+            selected_observed_hours = float(
+                aux_targets.loc[chosen_idx, "_observed_hours"]
+            )
+            fallback_over_requested_used = (
+                selected_observed_hours >= selected_requested_hours
+            )
+
+            if best_visibility is not None and best_visibility >= 100.0:
+                log_info = f"{name} scheduled for non-primary observation with full visibility."
+            else:
+                log_info = (
+                    "No non-primary target with full visibility; "
+                    f"{name} scheduled with {float(best_visibility or 0.0):.2f}% visibility"
+                )
+
             scheduled_rows.append([name, active_start, stop, ra_val, dec_val])
             logger.info(
-                (
-                    "%s scheduled for non-primary observations with "
-                    "full visibility from %s"
-                ),
+                "%s scheduled for non-primary observations from %s",
                 name,
                 target_def,
             )
             selected_row = scheduled_rows[-1]
-            priority_baseline = priorities[-1] if priorities else priority_val
             break
-
-        if vis_any:
-            chosen_idx = int(np.asarray(vis_percentages).argmax())
-            best_visibility = vis_percentages[chosen_idx]
-            if best_visibility >= 100 * config.min_visibility:
-                idx_value = vis_any[chosen_idx]
-                name = names[idx_value]
-                ra_val = ras[idx_value]
-                dec_val = decs[idx_value]
-                priority_val = priorities[idx_value]
-                log_info = (
-                    "No non-primary target with full visibility; "
-                    f"{name} scheduled with {best_visibility:.2f}% visibility"
-                )
-                scheduled_rows.append([name, active_start, stop, ra_val, dec_val])
-                logger.info(
-                    (
-                        "No non-primary target with full visibility; %s "
-                        "scheduled at %.2f%% visibility from %s"
-                    ),
-                    name,
-                    best_visibility,
-                    target_def,
-                )
-                selected_row = scheduled_rows[-1]
-                priority_baseline = priorities[-1] if priorities else priority_val
-                break
-            logger.warning(
-                "No non-primary target with visibility greater than %.2f%% from %s",
-                100 * config.min_visibility,
-                target_def,
-            )
 
     if selected_row is None:
         scheduled_rows.append(
@@ -1007,10 +1183,19 @@ def _schedule_auxiliary_target(
         stats.total_time += stop - active_start
         stats.last_priority = priority_val
 
-        if stats.total_time > deprioritization_limit:
-            logger.warning("Deprioritizing %s due to accumulated auxiliary time", name)
-            baseline = priority_baseline if priority_baseline else priority_val
-            stats.last_priority = 0.95 * float(baseline)
+        if (
+            fallback_over_requested_used
+            and selected_requested_hours is not None
+            and selected_observed_hours is not None
+        ):
+            logger.warning(
+                "Non-primary target %s has met requested observation time "
+                "(observed %.2f h >= requested %.2f h) but is the only visible option; "
+                "scheduling anyway",
+                name,
+                selected_observed_hours,
+                selected_requested_hours,
+            )
 
     result = pd.DataFrame(scheduled_rows, columns=row_columns)
     # Update all_target_obs_time
@@ -1036,20 +1221,64 @@ def _schedule_primary_target(
     start: datetime,
     obs_range: pd.DatetimeIndex,
 ) -> pd.DataFrame:
+    if "Transit Coverage" not in temp_df.columns:
+        raise ValueError("Primary candidate table is missing 'Transit Coverage'")
+
+    # Treat (near) 100% transit coverage as a first-class priority signal.
+    # We intentionally make this dominate over quality in the non-critical case.
+    full_coverage = temp_df["Transit Coverage"].astype(float) >= 0.999999
+
     if (temp_df["Transit Factor"] <= 2).any():
-        ranked = temp_df.sort_values(by=["Transit Factor"]).reset_index(drop=True)
+        # Critical case: urgency still wins, but prefer full coverage when urgency ties.
+        ranked = (
+            temp_df.assign(_full_coverage=full_coverage)
+            .sort_values(
+                by=[
+                    "Transit Factor",
+                    "_full_coverage",
+                    "Transit Coverage",
+                    "Quality Factor",
+                ],
+                ascending=[True, False, False, False],
+            )
+            .reset_index(drop=True)
+        )
     else:
-        ranked = temp_df.sort_values(
-            by=["Quality Factor", "Transit Factor"],
-            ascending=[False, True],
-        ).reset_index(drop=True)
+        # Non-critical case: always take full-coverage transits over partial ones.
+        ranked = (
+            temp_df.assign(_full_coverage=full_coverage)
+            .sort_values(
+                by=[
+                    "_full_coverage",
+                    "Quality Factor",
+                    "Transit Coverage",
+                    "Transit Factor",
+                ],
+                ascending=[False, False, False, True],
+            )
+            .reset_index(drop=True)
+        )
+
+    if "_full_coverage" in ranked.columns:
+        ranked = ranked.drop(columns=["_full_coverage"])
 
     first_row = ranked.iloc[0]
     planet_name = str(first_row["Planet Name"])
     ra_value = first_row["RA"]
     dec_value = first_row["DEC"]
     obs_start = pd.Timestamp(first_row["Obs Start"]).to_pydatetime()
-    obs_stop = obs_start + config.obs_window
+
+    # Use per-target visit duration from candidate (already computed in check_if_transits_in_obs_window)
+    visit_duration = first_row.get("Visit Duration")
+    if visit_duration is None or pd.isna(visit_duration):
+        raise ValueError(
+            f"Missing Visit Duration for scheduled target '{planet_name}'. "
+            "Expected per-target 'Obs Window (hrs)' to be present and valid."
+        )
+    elif isinstance(visit_duration, pd.Timedelta):
+        visit_duration = visit_duration.to_pytimedelta()
+
+    obs_stop = obs_start + visit_duration
     trans_cover = first_row["Transit Coverage"]
     saa_cover = first_row["SAA Overlap"]
     s_factor = first_row["Schedule Factor"]
@@ -1058,16 +1287,43 @@ def _schedule_primary_target(
     dfs: list[pd.DataFrame] = []
 
     if obs_range[0].to_pydatetime() < obs_start:
-        aux_df, aux_log = _schedule_auxiliary_target(
-            start,
-            obs_start,
-            config,
-            state,
-            inputs,
-        )
-        if not aux_df.empty:
-            dfs.append(aux_df)
-        logger.info(f"{aux_log}; window {start} to {obs_start}")
+        gap = obs_start - start
+        gap_minutes = gap.total_seconds() / 60.0
+        # Use strict > to avoid fencepost problem: a 5-minute window only yields
+        # 4-5 visibility samples at minute cadence, which may be filtered out by
+        # remove_short_sequences when min_sequence_minutes=5
+        if gap_minutes > config.min_sequence_minutes:
+            aux_df, aux_log = _schedule_auxiliary_target(
+                start,
+                obs_start,
+                config,
+                state,
+                inputs,
+            )
+            if not aux_df.empty:
+                dfs.append(aux_df)
+            logger.info(f"{aux_log}; window {start} to {obs_start}")
+        else:
+            # Gap is too short for a real observation - schedule Free Time instead
+            logger.info(
+                "Gap before primary observation too short (%.1f min <= %d min); "
+                "marking as Free Time from %s to %s",
+                gap_minutes,
+                config.min_sequence_minutes,
+                start,
+                obs_start,
+            )
+            free_time_df = pd.DataFrame(
+                [["Free Time", start, obs_start, float("nan"), float("nan")]],
+                columns=[
+                    "Target",
+                    "Observation Start",
+                    "Observation Stop",
+                    "RA",
+                    "DEC",
+                ],
+            )
+            dfs.append(free_time_df)
 
     main_schedule = pd.DataFrame(
         [
