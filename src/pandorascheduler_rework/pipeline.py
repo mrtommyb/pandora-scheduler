@@ -21,8 +21,6 @@ from pandorascheduler_rework.visibility.catalog import build_visibility_catalog
 LOGGER = logging.getLogger(__name__)
 
 
-# SchedulerRequest removed (legacy)
-
 
 @dataclass
 class SchedulerResult:
@@ -395,20 +393,6 @@ def _generate_target_manifests(
     )
 
 
-# _build_visibility_config removed (legacy)
-
-
-# _build_config removed (legacy)
-
-
-def _coerce_datetime(value: object, default: datetime) -> datetime:
-    if value is None:
-        return default
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
-        return datetime.fromisoformat(value)
-    raise TypeError(f"Unsupported datetime value: {value!r}")
 
 
 def _coerce_path(value: object, default: Path) -> Path:
@@ -444,34 +428,6 @@ def _target_definition_from_csv(path: Path) -> str:
     return stem
 
 
-def _coerce_transit_scheduling_weights(value: object) -> tuple[float, float, float]:
-    components: List[object]
-    if isinstance(value, str):
-        components = [
-            component.strip() for component in value.split(",") if component.strip()
-        ]
-    elif isinstance(value, (list, tuple)):
-        components = list(value)
-    elif value is None:
-        components = []
-    else:
-        components = [value]
-
-    if not components:
-        raise ValueError(
-            "transit_scheduling_weights must provide three numeric components"
-        )
-
-    weights = tuple(_as_float(component, 0.0) for component in components)
-
-    if len(weights) != 3:
-        raise ValueError(
-            "transit_scheduling_weights must contain exactly three values "
-            "(coverage, saa, schedule)."
-        )
-    return (weights[0], weights[1], weights[2])
-
-
 def _as_bool(value: object, default: bool) -> bool:
     if value is None:
         return default
@@ -487,34 +443,3 @@ def _as_bool(value: object, default: bool) -> bool:
     return default
 
 
-def _coerce_target_filters(value: object) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if isinstance(value, str):
-        tokens = [item.strip() for item in value.split(",") if item.strip()]
-        return tuple(tokens)
-    if isinstance(value, (list, tuple, set)):
-        return tuple(str(item) for item in value)
-    return (str(value),)
-
-
-def _as_float(value: object, default: float) -> float:
-    if value is None:
-        return default
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        return float(value)
-    raise TypeError(f"Expected float-like value, received {value!r}")
-
-
-def _as_int(value: object, default: int) -> int:
-    if value is None:
-        return default
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        return int(value)
-    raise TypeError(f"Expected int-like value, received {value!r}")
