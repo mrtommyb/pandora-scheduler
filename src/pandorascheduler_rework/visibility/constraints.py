@@ -530,8 +530,8 @@ def compute_visibility_with_constraints(
     sun_sep = fast_sep_deg(target_unit, sun_unit)
     moon_sep = fast_sep_deg(target_unit, moon_unit)
 
-    sun_ok = sun_sep >= config.sun_avoidance_deg
-    moon_ok = moon_sep >= config.moon_avoidance_deg
+    sun_ok = sun_sep > config.sun_avoidance_deg
+    moon_ok = moon_sep > config.moon_avoidance_deg
 
     # Day/night Earth-centre avoidance
     earth_threshold = effective_earth_threshold(
@@ -542,7 +542,7 @@ def compute_visibility_with_constraints(
         config.earth_avoidance_night_deg,
         config.earth_avoidance_deg,
     )
-    earth_ok = earth_center_sep_deg >= earth_threshold
+    earth_ok = earth_center_sep_deg > earth_threshold
 
     boresight_visible = sun_ok & moon_ok & earth_ok
 
