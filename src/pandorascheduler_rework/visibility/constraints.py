@@ -304,11 +304,22 @@ def solar_power_fraction(
     y_payload: np.ndarray,
     sun_unit: np.ndarray,
 ) -> np.ndarray:
-    """Fraction of maximum solar power at each timestep.
+    r"""Fraction of maximum solar power at each timestep.
 
-    ``P = |ŷ_payload · ŝ|`` — unity when the panel normal is aligned with the Sun.
+    Pandora's solar panels span the ±Y faces, so the panel *normal* lies
+    along ±X (not ±Y).  The power fraction is the cosine of the incidence
+    angle on the panel, which equals ``sin(θ_YS)`` where ``θ_YS`` is the
+    acute angle between ŷ and ŝ:
+
+    .. math::
+        P = \sin\!\bigl(\arccos(|\hat{y}\cdot\hat{s}|)\bigr)
+          = \sqrt{1 - (\hat{y}\cdot\hat{s})^2}
+
+    Unity when Y ⊥ Sun (panels face the Sun), zero when Y ∥ Sun (panels
+    edge-on).
     """
-    return np.abs(np.einsum("ij,ij->i", y_payload, sun_unit))
+    cos_ys = np.einsum("ij,ij->i", y_payload, sun_unit)
+    return np.sqrt(np.clip(1.0 - cos_ys ** 2, 0.0, 1.0))
 
 
 # ============================================================================

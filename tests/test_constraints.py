@@ -281,15 +281,15 @@ class TestEvaluateStarTracker:
 
 class TestSolarPowerFraction:
     def test_max_power(self):
-        """Y axis aligned with Sun → power = 1."""
+        """Y axis perpendicular to Sun → panels face Sun → power = 1."""
         y = _tile([0, 1, 0], 1)
-        sun = _tile([0, 1, 0], 1)
+        sun = _tile([1, 0, 0], 1)
         assert np.allclose(solar_power_fraction(y, sun), 1.0)
 
     def test_zero_power(self):
-        """Y axis perpendicular to Sun → power = 0."""
+        """Y axis aligned with Sun → panels edge-on → power = 0."""
         y = _tile([0, 1, 0], 1)
-        sun = _tile([1, 0, 0], 1)
+        sun = _tile([0, 1, 0], 1)
         assert np.allclose(solar_power_fraction(y, sun), 0.0, atol=1e-12)
 
 
