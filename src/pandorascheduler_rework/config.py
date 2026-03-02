@@ -100,8 +100,59 @@ class PandoraSchedulerConfig:
     moon_avoidance_deg: float = 25.0
     """Minimum angle from Moon (degrees)."""
 
-    earth_avoidance_deg: float = 86.0
-    """Minimum angle from Earth limb (degrees)."""
+    earth_avoidance_deg: float = 110.0
+    """Default Earth-center avoidance angle (degrees).
+
+    Used uniformly when both day/night overrides are None. When either
+    ``earth_avoidance_day_deg`` or ``earth_avoidance_night_deg`` is set,
+    those values take precedence for the corresponding orbital phase.
+    """
+
+    earth_avoidance_day_deg: Optional[float] = None
+    """Earth-center avoidance when the nearest limb is sunlit (degrees).
+
+    Set to ``None`` to use ``earth_avoidance_deg`` uniformly.
+    Recommended value when enabled: 110.0.
+    """
+
+    earth_avoidance_night_deg: Optional[float] = None
+    """Earth-center avoidance when the nearest limb is in shadow (degrees).
+
+    Set to ``None`` to use ``earth_avoidance_deg`` uniformly.
+    Recommended value when enabled: 80.0.
+    """
+
+    # ============================================================================
+    # STAR TRACKER KEEPOUT ANGLES (degrees)
+    # ============================================================================
+
+    st_sun_min_deg: float = 0.0
+    """Minimum star-tracker–Sun separation (degrees). 0 = disabled."""
+
+    st_moon_min_deg: float = 0.0
+    """Minimum star-tracker–Moon separation (degrees). 0 = disabled."""
+
+    st_earthlimb_min_deg: float = 0.0
+    """Minimum star-tracker–Earth-limb separation (degrees). 0 = disabled."""
+
+    st1_earthlimb_min_deg: Optional[float] = None
+    """Per-tracker override for ST1 Earth-limb keepout. None = use shared."""
+
+    st2_earthlimb_min_deg: Optional[float] = None
+    """Per-tracker override for ST2 Earth-limb keepout. None = use shared."""
+
+    st_required: int = 1
+    """Number of star trackers required to pass: 0 (skip), 1 (OR), or 2 (AND)."""
+
+    # ============================================================================
+    # ROLL OPTIMISATION
+    # ============================================================================
+
+    roll_step_deg: float = 2.0
+    """Roll sweep step size (degrees). Smaller = more accurate but slower."""
+
+    min_power_frac: float = 0.7
+    """Minimum solar power fraction to accept a roll angle."""
 
     # ============================================================================
     # XML GENERATION PARAMETERS
@@ -209,4 +260,23 @@ class PandoraSchedulerConfig:
             raise ValueError(
                 "transit_coverage_min must be in [0, 1], got %s"
                 % (self.transit_coverage_min,)
+            )
+
+        # Validate star tracker required count
+        if self.st_required not in (0, 1, 2):
+            raise ValueError(
+                "st_required must be 0, 1, or 2, got %s" % (self.st_required,)
+            )
+
+        # Validate roll step
+        if self.roll_step_deg <= 0:
+            raise ValueError(
+                "roll_step_deg must be > 0, got %s" % (self.roll_step_deg,)
+            )
+
+        # Validate min_power_frac
+        if not 0.0 <= self.min_power_frac <= 1.0:
+            raise ValueError(
+                "min_power_frac must be in [0, 1], got %s"
+                % (self.min_power_frac,)
             )

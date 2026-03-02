@@ -140,8 +140,60 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--earth-avoidance",
         type=float,
-        default=86.0,
-        help="Earth avoidance angle in degrees (default: 86.0)",
+        default=110.0,
+        help="Earth avoidance angle in degrees (default: 110.0)",
+    )
+    parser.add_argument(
+        "--earth-avoidance-day",
+        type=float,
+        default=None,
+        help="Earth avoidance when nearest limb is sunlit (degrees). None = use --earth-avoidance uniformly.",
+    )
+    parser.add_argument(
+        "--earth-avoidance-night",
+        type=float,
+        default=None,
+        help="Earth avoidance when nearest limb is in shadow (degrees). None = use --earth-avoidance uniformly.",
+    )
+
+    # Star tracker keepout configuration
+    parser.add_argument(
+        "--st-sun-min",
+        type=float,
+        default=0.0,
+        help="Star tracker Sun keepout angle in degrees (default: 0 = disabled)",
+    )
+    parser.add_argument(
+        "--st-moon-min",
+        type=float,
+        default=0.0,
+        help="Star tracker Moon keepout angle in degrees (default: 0 = disabled)",
+    )
+    parser.add_argument(
+        "--st-earthlimb-min",
+        type=float,
+        default=0.0,
+        help="Star tracker Earth-limb keepout angle in degrees (default: 0 = disabled)",
+    )
+    parser.add_argument(
+        "--st-required",
+        type=int,
+        default=1,
+        help="Number of star trackers required: 0 (skip), 1 (OR), 2 (AND) (default: 1)",
+    )
+
+    # Roll sweep configuration
+    parser.add_argument(
+        "--roll-step",
+        type=float,
+        default=2.0,
+        help="Roll sweep step size in degrees (default: 2.0)",
+    )
+    parser.add_argument(
+        "--min-power-frac",
+        type=float,
+        default=0.7,
+        help="Minimum solar power fraction to accept a roll angle (default: 0.7)",
     )
 
     # Scheduling configuration
@@ -577,8 +629,36 @@ def main() -> int:
         )
         earth_avoid = float(
             _get_any(
-                ["earth_avoidance_deg", "visibility_earth_deg"], args.earth_avoidance, 86.0
+                ["earth_avoidance_deg", "visibility_earth_deg"], args.earth_avoidance, 110.0
             )
+        )
+
+        # Day/night Earth avoidance (None = use uniform earth_avoid)
+        _raw_day = _get_val("earth_avoidance_day_deg", args.earth_avoidance_day, None)
+        earth_avoid_day = float(_raw_day) if _raw_day is not None else None
+        _raw_night = _get_val("earth_avoidance_night_deg", args.earth_avoidance_night, None)
+        earth_avoid_night = float(_raw_night) if _raw_night is not None else None
+
+        # Star tracker keepouts
+        st_sun_min = float(
+            _get_val("st_sun_min_deg", args.st_sun_min, 0.0)
+        )
+        st_moon_min = float(
+            _get_val("st_moon_min_deg", args.st_moon_min, 0.0)
+        )
+        st_earthlimb_min = float(
+            _get_val("st_earthlimb_min_deg", args.st_earthlimb_min, 0.0)
+        )
+        st_required = int(
+            _get_val("st_required", args.st_required, 1)
+        )
+
+        # Roll sweep
+        roll_step = float(
+            _get_val("roll_step_deg", args.roll_step, 2.0)
+        )
+        min_power_frac = float(
+            _get_val("min_power_frac", args.min_power_frac, 0.7)
         )
 
         short_visit_threshold_hours = float(
@@ -643,6 +723,16 @@ def main() -> int:
             sun_avoidance_deg=sun_avoid,
             moon_avoidance_deg=moon_avoid,
             earth_avoidance_deg=earth_avoid,
+            earth_avoidance_day_deg=earth_avoid_day,
+            earth_avoidance_night_deg=earth_avoid_night,
+            # Star tracker keepouts
+            st_sun_min_deg=st_sun_min,
+            st_moon_min_deg=st_moon_min,
+            st_earthlimb_min_deg=st_earthlimb_min,
+            st_required=st_required,
+            # Roll sweep
+            roll_step_deg=roll_step,
+            min_power_frac=min_power_frac,
             # XML / sequence generation
             obs_sequence_duration_min=obs_sequence_duration_min,
             occ_sequence_limit_min=occ_sequence_limit_min,

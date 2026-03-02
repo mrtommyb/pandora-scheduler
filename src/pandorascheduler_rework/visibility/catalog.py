@@ -15,6 +15,13 @@ from astropy.time import Time
 from pandorascheduler_rework.config import PandoraSchedulerConfig
 from pandorascheduler_rework.utils.io import read_csv_cached, read_parquet_cached
 
+from .constraints import (
+    _R_EARTH_KM,
+    _normalise,
+    compute_visibility_with_constraints,
+    detect_orbit_boundaries,
+    orbit_slices_from_boundaries,
+)
 from .geometry import (
     MinuteCadence,
     build_minute_cadence,
@@ -145,25 +152,58 @@ def _build_base_payload(ephemeris, cadence: MinuteCadence) -> dict[str, np.ndarr
     time_utc = Time(mjd_array, format="mjd", scale="utc")
     datetime_utc = time_utc.datetime64
 
+    # SkyCoord objects for angular separation (kept for backward compat)
+    earth_pc_sc = SkyCoord(
+        ephemeris.earth_pc,
+        unit=u.km,
+        representation_type="cartesian",
+    )
+    sun_pc_sc = SkyCoord(
+        ephemeris.sun_pc,
+        unit=u.km,
+        representation_type="cartesian",
+    )
+    moon_pc_sc = SkyCoord(
+        ephemeris.moon_pc,
+        unit=u.km,
+        representation_type="cartesian",
+    )
+
+    # --- Precompute unit vectors for constraint evaluation (once for all stars) ---
+    earth_pc_xyz = ephemeris.earth_pc  # (N, 3) km, s/c → Earth (nadir direction)
+    sun_pc_xyz = ephemeris.sun_pc      # (N, 3) km, s/c → Sun
+    moon_pc_xyz = ephemeris.moon_pc    # (N, 3) km, s/c → Moon
+
+    nadir_unit = _normalise(earth_pc_xyz)           # s/c → Earth centre
+    zenith_unit = -nadir_unit                       # Earth centre → s/c
+    sun_unit = _normalise(sun_pc_xyz)
+    moon_unit = _normalise(moon_pc_xyz)
+
+    observer_dist_km = np.linalg.norm(earth_pc_xyz, axis=1)  # (N,)
+    limb_angle_rad = np.arccos(
+        np.clip(_R_EARTH_KM / observer_dist_km, -1.0, 1.0)
+    )  # (N,)
+
+    # Orbit boundary detection from sub-satellite latitude
+    orbit_boundaries = detect_orbit_boundaries(ephemeris.spacecraft_lat_deg)
+    orbit_slices = orbit_slices_from_boundaries(orbit_boundaries, len(mjd_array))
+
     return {
         "Time(MJD_UTC)": mjd_array,
         "Time_UTC": datetime_utc,
         "SAA_Crossing": np.round(saa_crossing, 1),
-        "earth_pc": SkyCoord(
-            ephemeris.earth_pc,
-            unit=u.km,
-            representation_type="cartesian",
-        ),
-        "sun_pc": SkyCoord(
-            ephemeris.sun_pc,
-            unit=u.km,
-            representation_type="cartesian",
-        ),
-        "moon_pc": SkyCoord(
-            ephemeris.moon_pc,
-            unit=u.km,
-            representation_type="cartesian",
-        ),
+        # SkyCoord objects for backward-compatible separations
+        "earth_pc": earth_pc_sc,
+        "sun_pc": sun_pc_sc,
+        "moon_pc": moon_pc_sc,
+        # Unit vectors for constraint engine
+        "nadir_unit": nadir_unit,
+        "zenith_unit": zenith_unit,
+        "sun_unit": sun_unit,
+        "moon_unit": moon_unit,
+        "observer_dist_km": observer_dist_km,
+        "limb_angle_rad": limb_angle_rad,
+        "orbit_slices": orbit_slices,
     }
 
 
@@ -172,15 +212,32 @@ def _build_star_visibility(
     star_coord: SkyCoord,
     config: PandoraSchedulerConfig,
 ) -> pd.DataFrame:
-    sun_sep = payload["sun_pc"].separation(star_coord).deg
-    moon_sep = payload["moon_pc"].separation(star_coord).deg
-    earth_sep = payload["earth_pc"].separation(star_coord).deg
+    # --- Target unit vector (direction from observer to star) ---
+    # Use the SkyCoord Earth-centre separation as the baseline Earth check.
+    earth_center_sep_deg = payload["earth_pc"].separation(star_coord).deg
 
-    sun_req = sun_sep > config.sun_avoidance_deg
-    moon_req = moon_sep > config.moon_avoidance_deg
-    earth_req = earth_sep > config.earth_avoidance_deg
+    # Build target unit vector in the same ECI frame used by the ephemeris.
+    # SkyCoord.cartesian gives unit direction; replicate for each timestep.
+    tgt_cart = star_coord.icrs.cartesian
+    tgt_unit_1 = np.array([tgt_cart.x.value, tgt_cart.y.value, tgt_cart.z.value])
+    tgt_unit_1 = tgt_unit_1 / np.linalg.norm(tgt_unit_1)
+    N = len(payload["Time(MJD_UTC)"])
+    target_unit = np.broadcast_to(tgt_unit_1, (N, 3)).copy()
 
-    visible = (sun_req & moon_req & earth_req).astype(float)
+    results = compute_visibility_with_constraints(
+        target_unit=target_unit,
+        nadir_unit=payload["nadir_unit"],
+        sun_unit=payload["sun_unit"],
+        moon_unit=payload["moon_unit"],
+        observer_dist_km=payload["observer_dist_km"],
+        zenith_unit=payload["zenith_unit"],
+        limb_angle_rad=payload["limb_angle_rad"],
+        orbit_slices=payload["orbit_slices"],
+        earth_center_sep_deg=earth_center_sep_deg,
+        config=config,
+    )
+
+    visible = results["visible"].astype(float)
 
     # Use pre-computed datetime array from payload (computed once for all stars)
     data = {
@@ -188,9 +245,11 @@ def _build_star_visibility(
         "Time_UTC": payload["Time_UTC"],
         "SAA_Crossing": payload["SAA_Crossing"],
         "Visible": np.round(visible, 1),
-        "Earth_Sep": np.round(earth_sep, 3),
-        "Moon_Sep": np.round(moon_sep, 3),
-        "Sun_Sep": np.round(sun_sep, 3),
+        "Earth_Sep": np.round(earth_center_sep_deg, 3),
+        "Moon_Sep": np.round(results["moon_sep"], 3),
+        "Sun_Sep": np.round(results["sun_sep"], 3),
+        "Roll_Deg": np.round(results["roll_deg"], 2),
+        "N_ST_Pass": results["n_st_pass"].astype(int),
     }
     return pd.DataFrame(data)
 

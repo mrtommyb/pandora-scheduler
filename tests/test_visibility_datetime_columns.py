@@ -17,14 +17,17 @@ class TestDatetimeColumnGeneration:
     def test_star_visibility_includes_datetime_column(self):
         """Verify that generated star visibility includes Time_UTC column."""
         # Create minimal test case by directly calling the function
-        from collections import namedtuple
+        from pandorascheduler_rework.config import PandoraSchedulerConfig
 
         import astropy.units as u
         from astropy.coordinates import SkyCoord
 
-        # Create simple config-like object
-        Config = namedtuple('Config', ['sun_avoidance_deg', 'moon_avoidance_deg', 'earth_avoidance_deg'])
-        config = Config(sun_avoidance_deg=91.0, moon_avoidance_deg=25.0, earth_avoidance_deg=86.0)
+        config = PandoraSchedulerConfig(
+            window_start=datetime(2026, 2, 5),
+            window_end=datetime(2027, 2, 5),
+            earth_avoidance_deg=86.0,
+            st_required=0,
+        )
         
         # Create test payload
         n_points = 10
@@ -33,10 +36,23 @@ class TestDatetimeColumnGeneration:
         # Pre-compute datetime array (as done in _build_base_payload)
         time_utc = Time(mjd_values, format="mjd", scale="utc")
         datetime_utc = time_utc.to_datetime()
-        
+
+        # Build unit vectors matching _build_base_payload output
+        earth_pc_xyz = np.tile([0.0, 0.0, -6971.0], (n_points, 1))
+        sun_pc_xyz = np.tile([1.496e8, 0.0, 0.0], (n_points, 1))
+        moon_pc_xyz = np.tile([0.0, 3.844e5, 0.0], (n_points, 1))
+
+        def _normalise(v):
+            norms = np.linalg.norm(v, axis=1, keepdims=True)
+            norms = np.where(norms == 0, 1.0, norms)
+            return v / norms
+
+        nadir_unit = _normalise(earth_pc_xyz)
+        observer_dist_km = np.linalg.norm(earth_pc_xyz, axis=1)
+
         payload = {
             "Time(MJD_UTC)": mjd_values,
-            "Time_UTC": datetime_utc,  # Pre-computed datetime array
+            "Time_UTC": datetime_utc,
             "SAA_Crossing": np.zeros(n_points),
             "sun_pc": SkyCoord(ra=np.full(n_points, 100) * u.deg,
                               dec=np.zeros(n_points) * u.deg),
@@ -44,6 +60,13 @@ class TestDatetimeColumnGeneration:
                                dec=np.zeros(n_points) * u.deg),
             "earth_pc": SkyCoord(ra=np.full(n_points, 100) * u.deg,
                                 dec=np.zeros(n_points) * u.deg),
+            "nadir_unit": nadir_unit,
+            "zenith_unit": -nadir_unit,
+            "sun_unit": _normalise(sun_pc_xyz),
+            "moon_unit": _normalise(moon_pc_xyz),
+            "observer_dist_km": observer_dist_km,
+            "limb_angle_rad": np.arccos(np.clip(6371.0 / observer_dist_km, -1, 1)),
+            "orbit_slices": [slice(0, n_points)],
         }
         
         star_coord = SkyCoord(ra=0 * u.deg, dec=0 * u.deg)
