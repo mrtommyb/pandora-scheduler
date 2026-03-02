@@ -5,6 +5,11 @@
   "transit_coverage_min": 0.4,
   "min_visibility": 0.5,
 
+  "# Transit edge buffer parameters (pre/post transit)": null,
+  "short_visit_threshold_hours": 12.0,
+  "short_visit_edge_buffer_hours": 1.5,
+  "long_visit_edge_buffer_hours": 4.0,
+
   "transit_scheduling_weights": [0.8, 0.0, 0.2],
 
   "# XML / sequence generation options": null,

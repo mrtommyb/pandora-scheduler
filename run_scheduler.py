@@ -460,14 +460,42 @@ def main() -> int:
             with open(args.config, "r") as f:
                 json_config = json.load(f)
 
+        def _get_val(key: str, cli_value: Any, default: Any) -> Any:
+            """Prioritize CLI-provided value > JSON config > default.
+
+            Because many CLI args have non-None defaults, we treat "CLI provided" as
+            "CLI value differs from the default".
+            """
+
+            if cli_value is not None and cli_value != default:
+                return cli_value
+            if key in json_config and json_config[key] is not None:
+                return json_config[key]
+            return default
+
+        def _get_any(keys: list[str], cli_value: Any, default: Any) -> Any:
+            if cli_value is not None and cli_value != default:
+                return cli_value
+            for key in keys:
+                if key in json_config and json_config[key] is not None:
+                    return json_config[key]
+            return default
+
         # Default weights if not provided
         transit_scheduling_weights = (0.8, 0.0, 0.2)
 
-        # Resolve target definition base (explicit path only)
-        target_def_base = args.target_definitions
+        # Start with any pipeline extra inputs provided via JSON.
+        extra_inputs: Dict[str, Any] = {}
+        if isinstance(json_config.get("extra_inputs"), dict):
+            extra_inputs.update(json_config.get("extra_inputs") or {})
 
-        # Resolve visibility GMAT file (explicit path only)
-        visibility_gmat = args.gmat_ephemeris
+        # Resolve target definition base (CLI overrides JSON)
+        target_def_base = args.target_definitions or extra_inputs.get(
+            "target_definition_base"
+        )
+
+        # Resolve visibility GMAT file (CLI overrides JSON)
+        visibility_gmat = args.gmat_ephemeris or extra_inputs.get("visibility_gmat")
 
         # 2. Validate Inputs
         if args.generate_visibility and not target_def_base:
@@ -478,8 +506,13 @@ def main() -> int:
             return 1
 
         # Determine whether visibility generation was requested (CLI or JSON)
-        generate_visibility = args.generate_visibility or json_config.get(
-            "generate_visibility", False
+        generate_visibility = bool(args.generate_visibility) or (
+            str(
+                extra_inputs.get(
+                    "generate_visibility", json_config.get("generate_visibility", "")
+                )
+            ).lower()
+            in {"1", "true", "yes", "y"}
         )
         # `config` is not yet constructed here, so check the CLI/ENV visibility GMAT
         if generate_visibility and visibility_gmat is None:
@@ -489,14 +522,16 @@ def main() -> int:
 
         # Build PandoraSchedulerConfig with the dataclass field names and types
         schedule_step_hours = float(
-            get_val("schedule_step_hours", args.schedule_step_hours, 24.0)
+            _get_val("schedule_step_hours", args.schedule_step_hours, 24.0)
         )
-        transit_cov = float(get_val("transit_coverage_min", args.transit_coverage, 0.4))
-        min_vis = float(get_val("min_visibility", args.min_visibility, 0.5))
+        transit_cov = float(
+            _get_val("transit_coverage_min", args.transit_coverage, 0.4)
+        )
+        min_vis = float(_get_val("min_visibility", args.min_visibility, 0.5))
 
         # Coerce unified transit_scheduling_weights from JSON or CLI into a 3-tuple
-        raw_transit_weights = (
-            json_config.get("transit_scheduling_weights") or transit_scheduling_weights
+        raw_transit_weights = _get_val(
+            "transit_scheduling_weights", args.weights, transit_scheduling_weights
         )
         if isinstance(raw_transit_weights, str):
             raw_transit_weights = tuple(
@@ -504,19 +539,24 @@ def main() -> int:
             )
         transit_weights_tuple = tuple(float(x) for x in raw_transit_weights)
 
-        extra_inputs: Dict[str, Any] = {}
         if target_def_base:
-            extra_inputs["target_definition_base"] = Path(target_def_base)
-            # When target definitions are provided, we need to specify which categories to process.
-            # These map to the standard directory names in the PandoraTargetList repository.
-            extra_inputs["target_definition_files"] = [
-                "exoplanet",
-                "auxiliary-standard",
-                "monitoring-standard",
-                "occultation-standard",
-            ]
+            extra_inputs["target_definition_base"] = Path(str(target_def_base))
+            # If the JSON doesn't provide an explicit list, use the standard set.
+            extra_inputs.setdefault(
+                "target_definition_files",
+                [
+                    "exoplanet",
+                    "auxiliary-standard",
+                    "monitoring-standard",
+                    "occultation-standard",
+                ],
+            )
 
         if args.skip_manifests:
+            extra_inputs["skip_manifests"] = True
+
+        # Allow JSON-only control of skip_manifests
+        if str(extra_inputs.get("skip_manifests", "")).lower() in {"1", "true", "yes", "y"}:
             extra_inputs["skip_manifests"] = True
 
         # Visibility GMAT goes into the typed field `gmat_ephemeris` on the config
@@ -524,6 +564,63 @@ def main() -> int:
             gmat_path = None
         else:
             gmat_path = Path(str(visibility_gmat)).expanduser().resolve()
+
+        sun_avoid = float(
+            _get_any(
+                ["sun_avoidance_deg", "visibility_sun_deg"], args.sun_avoidance, 91.0
+            )
+        )
+        moon_avoid = float(
+            _get_any(
+                ["moon_avoidance_deg", "visibility_moon_deg"], args.moon_avoidance, 25.0
+            )
+        )
+        earth_avoid = float(
+            _get_any(
+                ["earth_avoidance_deg", "visibility_earth_deg"], args.earth_avoidance, 86.0
+            )
+        )
+
+        short_visit_threshold_hours = float(
+            _get_val("short_visit_threshold_hours", None, 12.0)
+        )
+        short_visit_edge_buffer_hours = float(
+            _get_val("short_visit_edge_buffer_hours", None, 1.5)
+        )
+        long_visit_edge_buffer_hours = float(
+            _get_val("long_visit_edge_buffer_hours", None, 4.0)
+        )
+
+        obs_sequence_duration_min = int(_get_val("obs_sequence_duration_min", None, 90))
+        occ_sequence_limit_min = int(_get_val("occ_sequence_limit_min", None, 50))
+        min_sequence_minutes = int(_get_val("min_sequence_minutes", None, 5))
+        break_occultation_sequences = bool(
+            _get_val("break_occultation_sequences", None, True)
+        )
+
+        std_obs_duration_hours = float(_get_val("std_obs_duration_hours", None, 0.5))
+        std_obs_frequency_days = float(_get_val("std_obs_frequency_days", None, 3.0))
+
+        force_regenerate = bool(_get_val("force_regenerate", None, False))
+        use_target_list_for_occultations = bool(
+            _get_val("use_target_list_for_occultations", None, False)
+        )
+        prioritise_occultations_by_slew = bool(
+            _get_val("prioritise_occultations_by_slew", None, False)
+        )
+
+        commissioning_days = int(_get_val("commissioning_days", None, 0))
+
+        show_progress = bool(_get_val("show_progress", args.show_progress, False))
+        use_legacy_mode = bool(_get_any(["use_legacy_mode", "legacy_mode"], args.legacy_mode, False))
+
+        aux_sort_key = str(_get_val("aux_sort_key", None, "sort_by_tdf_priority"))
+        author = _get_val("author", None, None)
+        created_timestamp = _get_val("created_timestamp", None, None)
+        visit_limit = _get_val("visit_limit", None, None)
+        target_filters = _get_val("target_filters", None, ())
+        if target_filters is None:
+            target_filters = ()
 
         config = PandoraSchedulerConfig(
             window_start=parse_datetime(args.start),
@@ -535,14 +632,39 @@ def main() -> int:
             # Scheduling Thresholds
             transit_coverage_min=transit_cov,
             min_visibility=min_vis,
-            commissioning_days=int(json_config.get("commissioning_days", 0)),
+            commissioning_days=commissioning_days,
+            # Transit edge buffers
+            short_visit_threshold_hours=short_visit_threshold_hours,
+            short_visit_edge_buffer_hours=short_visit_edge_buffer_hours,
+            long_visit_edge_buffer_hours=long_visit_edge_buffer_hours,
             # Weights
             transit_scheduling_weights=transit_weights_tuple,
+            # Keepout angles
+            sun_avoidance_deg=sun_avoid,
+            moon_avoidance_deg=moon_avoid,
+            earth_avoidance_deg=earth_avoid,
+            # XML / sequence generation
+            obs_sequence_duration_min=obs_sequence_duration_min,
+            occ_sequence_limit_min=occ_sequence_limit_min,
+            min_sequence_minutes=min_sequence_minutes,
+            break_occultation_sequences=break_occultation_sequences,
+            # Standard observations
+            std_obs_duration_hours=std_obs_duration_hours,
+            std_obs_frequency_days=std_obs_frequency_days,
             # Extra inputs for pipeline
             extra_inputs=extra_inputs,
             # Flags
-            show_progress=args.show_progress,
-            use_legacy_mode=args.legacy_mode,
+            show_progress=show_progress,
+            force_regenerate=force_regenerate,
+            use_target_list_for_occultations=use_target_list_for_occultations,
+            prioritise_occultations_by_slew=prioritise_occultations_by_slew,
+            use_legacy_mode=use_legacy_mode,
+            # Sorting / metadata
+            aux_sort_key=aux_sort_key,
+            author=author,
+            created_timestamp=created_timestamp,
+            visit_limit=visit_limit,
+            target_filters=target_filters,
         )
 
         # 3. Ensure targets manifest location exists (may be an output/data dir)
@@ -601,16 +723,6 @@ def main() -> int:
             stats.dump_stats(args.profile_output)
             print(f"\nProfiling results written to {args.profile_output}")
             stats.print_stats(30)
-
-
-def get_val(key: str, cli_arg: Any, default: Any) -> Any:
-    """Helper to prioritize CLI arg > JSON config > default."""
-    if cli_arg is not None:
-        return cli_arg
-    # Note: json_config would need to be passed in or global
-    # For simplicity in this script structure, we'll rely on CLI or defaults mostly
-    # But to support JSON fully, we'd check it here.
-    return default
 
 
 if __name__ == "__main__":

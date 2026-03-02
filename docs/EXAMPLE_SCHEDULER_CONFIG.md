@@ -27,6 +27,12 @@ Scheduling thresholds
 - `transit_coverage_min` (float 0-1, default `0.2`): minimum transit coverage to consider scheduling.
 - `min_visibility` (float, default `0.0`): minimum visibility fraction for considering a window.
 
+Transit edge buffers (pre/post transit)
+- `short_visit_threshold_hours` (float, default `12.0`): visits shorter than this use the short edge buffer.
+- `short_visit_edge_buffer_hours` (float, default `1.5`): edge buffer applied before/after the transit for short visits.
+- `long_visit_edge_buffer_hours` (float, default `4.0`): edge buffer applied before/after the transit for long visits.
+- These buffers are used when validating that each target's `Obs Window (hrs)` is long enough to cover: transit + 2×edge-buffer.
+
 Auxiliary requested-time behavior
 - Auxiliary/standard targets are capped using the per-target `Number of Hours Requested` values from the target manifests (rather than a global config threshold).
 - If no eligible non-primary targets are visible in a window, the scheduler will fall back to scheduling a target that has already met its requested hours and will emit warnings when this occurs.
