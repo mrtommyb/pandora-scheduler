@@ -365,14 +365,22 @@ def orbit_slices_from_boundaries(boundaries: np.ndarray, N: int) -> list[slice]:
 
 def _st_thresholds_active(config: PandoraSchedulerConfig) -> bool:
     """Return ``True`` if any star tracker constraint is enabled."""
-    return (
-        config.st_required > 0
-        and (
-            config.st_sun_min_deg > 0
-            or config.st_moon_min_deg > 0
-            or config.st_earthlimb_min_deg > 0
-        )
-    )
+    if config.st_required <= 0:
+        return False
+    # Check shared thresholds
+    if (
+        config.st_sun_min_deg > 0
+        or config.st_moon_min_deg > 0
+        or config.st_earthlimb_min_deg > 0
+    ):
+        return True
+    # Check per-tracker overrides
+    if (
+        (config.st1_earthlimb_min_deg is not None and config.st1_earthlimb_min_deg > 0)
+        or (config.st2_earthlimb_min_deg is not None and config.st2_earthlimb_min_deg > 0)
+    ):
+        return True
+    return False
 
 
 def find_best_roll_per_orbit(

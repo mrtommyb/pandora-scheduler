@@ -176,6 +176,18 @@ def parse_args() -> argparse.Namespace:
         help="Star tracker Earth-limb keepout angle in degrees (default: 0 = disabled)",
     )
     parser.add_argument(
+        "--st1-earthlimb-min",
+        type=float,
+        default=None,
+        help="ST1 Earth-limb keepout override (degrees). None = use --st-earthlimb-min.",
+    )
+    parser.add_argument(
+        "--st2-earthlimb-min",
+        type=float,
+        default=None,
+        help="ST2 Earth-limb keepout override (degrees). None = use --st-earthlimb-min.",
+    )
+    parser.add_argument(
         "--st-required",
         type=int,
         default=1,
@@ -649,6 +661,18 @@ def main() -> int:
         st_earthlimb_min = float(
             _get_val("st_earthlimb_min_deg", args.st_earthlimb_min, 0.0)
         )
+        _raw_st1_el = _get_any(
+            ["st1_earthlimb_min_deg"],
+            getattr(args, "st1_earthlimb_min", None),
+            None,
+        )
+        st1_earthlimb_min = float(_raw_st1_el) if _raw_st1_el is not None else None
+        _raw_st2_el = _get_any(
+            ["st2_earthlimb_min_deg"],
+            getattr(args, "st2_earthlimb_min", None),
+            None,
+        )
+        st2_earthlimb_min = float(_raw_st2_el) if _raw_st2_el is not None else None
         st_required = int(
             _get_val("st_required", args.st_required, 1)
         )
@@ -729,6 +753,8 @@ def main() -> int:
             st_sun_min_deg=st_sun_min,
             st_moon_min_deg=st_moon_min,
             st_earthlimb_min_deg=st_earthlimb_min,
+            st1_earthlimb_min_deg=st1_earthlimb_min,
+            st2_earthlimb_min_deg=st2_earthlimb_min,
             st_required=st_required,
             # Roll sweep
             roll_step_deg=roll_step,
