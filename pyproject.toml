@@ -12,7 +12,7 @@ packages = [
 python = "^3.12"
 numpy = "^2.1.0"
 pandas = "^2.2.0"
-astropy = "^6.0.0"
+astropy = ">=6.0.0"
 tqdm = "^4.66.0"
 
 [tool.poetry.group.dev.dependencies]
@@ -20,6 +20,7 @@ black = "^24.1.0"
 flake8 = "^7.0.0"
 pytest = "^8.2.0"
 ruff = "^0.14.7"
+pandoravisibility = {path = "../pandora-visibility", develop = true}
 
 [tool.pytest.ini_options]
 filterwarnings = [
