@@ -95,12 +95,17 @@ def earthlimb_is_sunlit(
     target_unit: np.ndarray,
     nadir_unit: np.ndarray,
     sun_unit: np.ndarray,
+    limb_angle_rad: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Determine whether the nearest Earth-limb point to the target is sunlit.
 
-    The algorithm projects the target direction onto the plane perpendicular to
-    the nadir direction to find the angular direction of the nearest limb point,
-    then checks whether the Sun is on the same side.
+    The nearest limb point's outward surface normal is:
+
+        n = cos(limb_angle) * zenith  +  sin(limb_angle) * limb_dir
+
+    where *limb_dir* is the projection of the target direction onto the plane
+    perpendicular to the zenith, and *limb_angle* = arccos(R_earth / d).
+    The limb point is sunlit when ``dot(n, sun) > 0``.
 
     Parameters
     ----------
@@ -110,6 +115,10 @@ def earthlimb_is_sunlit(
         Unit direction from observer toward Earth centre.
     sun_unit : ndarray, shape ``(N, 3)``
         Unit direction from observer toward the Sun.
+    limb_angle_rad : ndarray, shape ``(N,)``, or None
+        Earth-limb half-angle in radians (``arccos(R_earth / d)``).
+        When *None*, falls back to a horizontal projection only
+        (legacy behaviour, ignoring the zenith component).
 
     Returns
     -------
@@ -128,8 +137,19 @@ def earthlimb_is_sunlit(
     proj_norm = np.where(proj_norm == 0, 1.0, proj_norm)
     limb_dir = proj / proj_norm  # unit direction to nearest limb point (N, 3)
 
-    # Check if the limb point faces the Sun
-    return np.einsum("ij,ij->i", limb_dir, sun_unit) > 0
+    if limb_angle_rad is None:
+        # Legacy fallback: horizontal projection only
+        return np.einsum("ij,ij->i", limb_dir, sun_unit) > 0
+
+    # Full surface-normal check: n = cos(θ)*zenith + sin(θ)*limb_dir
+    cos_la = np.cos(limb_angle_rad)
+    sin_la = np.sin(limb_angle_rad)
+    # n · sun = cos(θ)*(zenith·sun) + sin(θ)*(limb_dir·sun)
+    dot_n_sun = (
+        cos_la * np.einsum("ij,ij->i", zenith, sun_unit)
+        + sin_la * np.einsum("ij,ij->i", limb_dir, sun_unit)
+    )
+    return dot_n_sun > 0
 
 
 def effective_earth_threshold(
@@ -139,6 +159,7 @@ def effective_earth_threshold(
     day_deg: Optional[float],
     night_deg: Optional[float],
     default_deg: float,
+    limb_angle_rad: Optional[np.ndarray] = None,
 ) -> np.ndarray | float:
     """Per-timestep Earth-avoidance threshold (degrees).
 
@@ -146,12 +167,21 @@ def effective_earth_threshold(
     *default_deg* (no per-timestep branch needed).  Otherwise returns an
     ``(N,)`` array with the day value where the limb is sunlit and the night
     value where it is not.
+
+    Parameters
+    ----------
+    limb_angle_rad : ndarray, shape ``(N,)``, or None
+        Earth-limb half-angle in radians, forwarded to
+        ``earthlimb_is_sunlit``.  Required for correct geometry;
+        when *None* falls back to legacy horizontal-projection-only.
     """
     if day_deg is None and night_deg is None:
         return default_deg
     day = day_deg if day_deg is not None else default_deg
     night = night_deg if night_deg is not None else default_deg
-    sunlit = earthlimb_is_sunlit(target_unit, nadir_unit, sun_unit)
+    sunlit = earthlimb_is_sunlit(
+        target_unit, nadir_unit, sun_unit, limb_angle_rad=limb_angle_rad
+    )
     return np.where(sunlit, day, night)
 
 
@@ -560,6 +590,7 @@ def compute_visibility_with_constraints(
         config.earth_avoidance_day_deg,
         config.earth_avoidance_night_deg,
         config.earth_avoidance_deg,
+        limb_angle_rad=limb_angle_rad,
     )
     earth_ok = earth_center_sep_deg > earth_threshold
 

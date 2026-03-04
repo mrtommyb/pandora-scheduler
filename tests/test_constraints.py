@@ -157,6 +157,64 @@ class TestEarthlimbIsSunlit:
         assert result[0] is np.True_
         assert result[1] is np.False_
 
+    def test_legacy_none_limb_angle(self):
+        """Without limb_angle_rad, falls back to horizontal projection."""
+        nadir = _tile([0, 0, -1], 1)
+        target = _tile([1, 0, 0], 1)
+        sun = _tile([1, 0, 0], 1)
+        result_legacy = earthlimb_is_sunlit(target, nadir, sun, limb_angle_rad=None)
+        result_no_arg = earthlimb_is_sunlit(target, nadir, sun)
+        assert result_legacy[0] == result_no_arg[0]
+
+    def test_surface_normal_geometry(self):
+        """With limb_angle_rad, the zenith component of the surface normal matters.
+
+        At 600 km altitude the limb half-angle θ ≈ 24° so cos(θ) ≈ 0.91.
+        The surface normal n = cos(θ)·zenith + sin(θ)·limb_dir.  If the Sun
+        is purely along −zenith (i.e. directly below the observer), the old
+        horizontal-only check would return sunlit=False (limb_dir·sun = 0),
+        but actually n·sun = cos(θ)·(zenith·sun) < 0 so it's still dark.
+
+        More importantly: Sun along +zenith (above observer, opposite nadir)
+        means zenith·sun = 1, so n·sun = cos(θ) > 0 → sunlit, regardless of
+        limb_dir·sun.  With horizontal-only check, limb_dir·sun = 0 gives
+        NOT sunlit.  The surface-normal check correctly identifies this as
+        sunlit because the zenith component dominates.
+        """
+        nadir = _tile([0, 0, -1], 1)     # Earth below
+        target = _tile([1, 0, 0], 1)     # target along +X
+        sun = _tile([0, 0, 1], 1)        # Sun directly above (along zenith)
+
+        # 600 km altitude: limb angle ≈ arccos(6371/6971)
+        R_EARTH = 6371.0
+        alt_km = 600.0
+        la_rad = np.array([np.arccos(R_EARTH / (R_EARTH + alt_km))])
+
+        # Without limb_angle_rad: horizontal projection only
+        # limb_dir = [1,0,0], sun = [0,0,1] → dot = 0 → NOT sunlit
+        legacy = earthlimb_is_sunlit(target, nadir, sun, limb_angle_rad=None)
+        assert not legacy[0], "Legacy horizontal check should give dark"
+
+        # With limb_angle_rad: surface normal has dominant zenith component
+        # n·sun = cos(θ)·1 + sin(θ)·0 = cos(θ) > 0 → sunlit
+        fixed = earthlimb_is_sunlit(target, nadir, sun, limb_angle_rad=la_rad)
+        assert fixed[0], "Surface-normal check should detect sunlit"
+
+    def test_surface_normal_sun_below(self):
+        """Sun directly below (along nadir) → limb is NOT sunlit."""
+        nadir = _tile([0, 0, -1], 1)
+        target = _tile([1, 0, 0], 1)
+        sun = _tile([0, 0, -1], 1)   # Sun along nadir
+
+        R_EARTH = 6371.0
+        la_rad = np.array([np.arccos(R_EARTH / (R_EARTH + 600.0))])
+
+        result = earthlimb_is_sunlit(target, nadir, sun, limb_angle_rad=la_rad)
+        # n·sun = cos(θ)·(zenith·nadir-dir) + sin(θ)·(limb·nadir-dir)
+        # zenith = [0,0,1], sun = [0,0,-1] → zenith·sun = -1
+        # n·sun = cos(θ)·(-1) + sin(θ)·0 = -cos(θ) < 0 → NOT sunlit
+        assert not result[0]
+
 
 # ============================================================================
 # effective_earth_threshold
