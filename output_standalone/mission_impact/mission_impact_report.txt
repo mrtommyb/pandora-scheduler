@@ -34,33 +34,33 @@
 
     F_daynight_ST_strict_both: Day/night 110°/80° + strict ST (Sun=60°, Moon=30°, Limb=20°, 2 req)
       Targets meeting 10-transit req: 13/20
-      Total transit deficit: 40
-      Minimum surplus: -9
+      Total transit deficit: 38
+      Minimum surplus: -8
 
 
   SCHEDULABLE TRANSITS PER TARGET (threshold >= 20% coverage):
   Planet              Nd      A(+/-)      B(+/-)      C(+/-)      D(+/-)      E(+/-)      F(+/-)
   ----------------------------------------------------------------------------------------------
-  GJ_3090b            10   64 (+54)   64 (+54)   64 (+54)   64 (+54)   64 (+54)   21 (+11)
+  GJ_3090b            10   64 (+54)   64 (+54)   64 (+54)   64 (+54)   63 (+53)   21 (+11)
   GJ_3470b            10   46 (+36)   34 (+24)   46 (+36)   46 (+36)   46 (+36)   22 (+12)
-  HAT-P-11b           10   37 (+27)   37 (+27)   37 (+27)   37 (+27)   37 (+27)    1*( -9)
-  HAT-P-12b           10   56 (+46)   56 (+46)   56 (+46)   56 (+46)   56 (+46)   10 ( +0)
+  HAT-P-11b           10   37 (+27)   37 (+27)   37 (+27)   37 (+27)   37 (+27)    2*( -8)
+  HAT-P-12b           10   56 (+46)   56 (+46)   56 (+46)   56 (+46)   56 (+46)   11 ( +1)
   HAT-P-18b           10   33 (+23)   30 (+20)   33 (+23)   33 (+23)   33 (+23)    9*( -1)
   HAT-P-26b           10   40 (+30)   28 (+18)   40 (+30)   40 (+30)   40 (+30)   22 (+12)
   HD_73583b           10   27 (+17)   22 (+12)   27 (+17)   27 (+17)   27 (+17)   10 ( +0)
-  L_98-59c            10   46 (+36)   46 (+36)   46 (+36)   46 (+36)   46 (+36)   22 (+12)
+  L_98-59c            10   46 (+36)   46 (+36)   46 (+36)   46 (+36)   46 (+36)   23 (+13)
   TOI-2076b           10   17 ( +7)   17 ( +7)   17 ( +7)   17 ( +7)   17 ( +7)    2*( -8)
   TOI-244b            10   24 (+14)   24 (+14)   24 (+14)   24 (+14)   24 (+14)    7*( -3)
   TOI-270d            10   15 ( +5)   15 ( +5)   15 ( +5)   15 ( +5)   15 ( +5)    3*( -7)
   TOI-3629b           10   45 (+35)   43 (+33)   45 (+35)   45 (+35)   45 (+35)   13 ( +3)
-  TOI-3884b           10   39 (+29)   27 (+17)   39 (+29)   39 (+29)   39 (+29)   26 (+16)
-  TOI-674b            10   91 (+81)   74 (+64)   91 (+81)   91 (+81)   91 (+81)   54 (+44)
+  TOI-3884b           10   39 (+29)   27 (+17)   39 (+29)   39 (+29)   39 (+29)   27 (+17)
+  TOI-674b            10   91 (+81)   74 (+64)   91 (+81)   90 (+80)   88 (+78)   54 (+44)
   TOI-942b            10   41 (+31)   41 (+31)   41 (+31)   41 (+31)   41 (+31)    4*( -6)
-  TOI-942c            10   18 ( +8)   17 ( +7)   18 ( +8)   18 ( +8)   18 ( +8)    4*( -6)
+  TOI-942c            10   18 ( +8)   17 ( +7)   18 ( +8)   18 ( +8)   18 ( +8)    5*( -5)
   WASP-107b           10   29 (+19)   23 (+13)   29 (+19)   29 (+19)   29 (+19)   20 (+10)
-  WASP-52b            10   92 (+82)   66 (+56)   92 (+82)   92 (+82)   92 (+82)   40 (+30)
-  WASP-69b            10   41 (+31)   30 (+20)   41 (+31)   41 (+31)   41 (+31)   19 ( +9)
-  WASP-80b            10   55 (+45)   41 (+31)   55 (+45)   55 (+45)   55 (+45)   32 (+22)
+  WASP-52b            10   92 (+82)   66 (+56)   92 (+82)   92 (+82)   92 (+82)   45 (+35)
+  WASP-69b            10   41 (+31)   30 (+20)   41 (+31)   41 (+31)   41 (+31)   20 (+10)
+  WASP-80b            10   55 (+45)   41 (+31)   55 (+45)   55 (+45)   55 (+45)   31 (+21)
 
 
   TARGETS AT RISK (negative surplus in any scenario):
@@ -68,41 +68,41 @@
     HAT-P-11b (Need 10, Period=4.89d, Star=HAT-P-11):
       A_baseline_86: 37/75 schedulable (surplus=+27, mean_cov=0.26)
       B_earth_110: 37/75 schedulable (surplus=+27, mean_cov=0.18)
-      C_daynight_110_80: 37/75 schedulable (surplus=+27, mean_cov=0.28)
+      C_daynight_110_80: 37/75 schedulable (surplus=+27, mean_cov=0.26)
       D_daynight_ST_moderate: 37/75 schedulable (surplus=+27, mean_cov=0.23)
-      E_daynight_ST_strict: 37/75 schedulable (surplus=+27, mean_cov=0.20)
-      F_daynight_ST_strict_both: 1/75 schedulable (surplus=-9, mean_cov=0.07)
+      E_daynight_ST_strict: 37/75 schedulable (surplus=+27, mean_cov=0.19)
+      F_daynight_ST_strict_both: 2/75 schedulable (surplus=-8, mean_cov=0.07)
 
     HAT-P-18b (Need 10, Period=5.51d, Star=HAT-P-18):
       A_baseline_86: 33/67 schedulable (surplus=+23, mean_cov=0.26)
       B_earth_110: 30/67 schedulable (surplus=+20, mean_cov=0.16)
-      C_daynight_110_80: 33/67 schedulable (surplus=+23, mean_cov=0.29)
-      D_daynight_ST_moderate: 33/67 schedulable (surplus=+23, mean_cov=0.26)
-      E_daynight_ST_strict: 33/67 schedulable (surplus=+23, mean_cov=0.20)
+      C_daynight_110_80: 33/67 schedulable (surplus=+23, mean_cov=0.24)
+      D_daynight_ST_moderate: 33/67 schedulable (surplus=+23, mean_cov=0.23)
+      E_daynight_ST_strict: 33/67 schedulable (surplus=+23, mean_cov=0.18)
       F_daynight_ST_strict_both: 9/67 schedulable (surplus=-1, mean_cov=0.07)
 
     TOI-2076b (Need 10, Period=10.36d, Star=TOI-2076):
       A_baseline_86: 17/35 schedulable (surplus=+7, mean_cov=0.26)
       B_earth_110: 17/35 schedulable (surplus=+7, mean_cov=0.17)
-      C_daynight_110_80: 17/35 schedulable (surplus=+7, mean_cov=0.28)
-      D_daynight_ST_moderate: 17/35 schedulable (surplus=+7, mean_cov=0.26)
+      C_daynight_110_80: 17/35 schedulable (surplus=+7, mean_cov=0.26)
+      D_daynight_ST_moderate: 17/35 schedulable (surplus=+7, mean_cov=0.25)
       E_daynight_ST_strict: 17/35 schedulable (surplus=+7, mean_cov=0.20)
       F_daynight_ST_strict_both: 2/35 schedulable (surplus=-8, mean_cov=0.08)
 
     TOI-244b (Need 10, Period=7.40d, Star=TOI-244):
       A_baseline_86: 24/49 schedulable (surplus=+14, mean_cov=0.26)
       B_earth_110: 24/49 schedulable (surplus=+14, mean_cov=0.18)
-      C_daynight_110_80: 24/49 schedulable (surplus=+14, mean_cov=0.28)
-      D_daynight_ST_moderate: 24/49 schedulable (surplus=+14, mean_cov=0.27)
-      E_daynight_ST_strict: 24/49 schedulable (surplus=+14, mean_cov=0.21)
+      C_daynight_110_80: 24/49 schedulable (surplus=+14, mean_cov=0.26)
+      D_daynight_ST_moderate: 24/49 schedulable (surplus=+14, mean_cov=0.25)
+      E_daynight_ST_strict: 24/49 schedulable (surplus=+14, mean_cov=0.19)
       F_daynight_ST_strict_both: 7/49 schedulable (surplus=-3, mean_cov=0.09)
 
     TOI-270d (Need 10, Period=11.38d, Star=TOI-270):
       A_baseline_86: 15/32 schedulable (surplus=+5, mean_cov=0.22)
       B_earth_110: 15/32 schedulable (surplus=+5, mean_cov=0.16)
-      C_daynight_110_80: 15/32 schedulable (surplus=+5, mean_cov=0.24)
-      D_daynight_ST_moderate: 15/32 schedulable (surplus=+5, mean_cov=0.22)
-      E_daynight_ST_strict: 15/32 schedulable (surplus=+5, mean_cov=0.20)
+      C_daynight_110_80: 15/32 schedulable (surplus=+5, mean_cov=0.23)
+      D_daynight_ST_moderate: 15/32 schedulable (surplus=+5, mean_cov=0.21)
+      E_daynight_ST_strict: 15/32 schedulable (surplus=+5, mean_cov=0.19)
       F_daynight_ST_strict_both: 3/32 schedulable (surplus=-7, mean_cov=0.06)
 
     TOI-942b (Need 10, Period=4.32d, Star=TOI-942):
@@ -119,31 +119,31 @@
       C_daynight_110_80: 18/36 schedulable (surplus=+8, mean_cov=0.28)
       D_daynight_ST_moderate: 18/36 schedulable (surplus=+8, mean_cov=0.27)
       E_daynight_ST_strict: 18/36 schedulable (surplus=+8, mean_cov=0.20)
-      F_daynight_ST_strict_both: 4/36 schedulable (surplus=-6, mean_cov=0.08)
+      F_daynight_ST_strict_both: 5/36 schedulable (surplus=-5, mean_cov=0.08)
 
 
   STAR VISIBILITY FRACTIONS (% of year visible):
   Star                      A        B        C        D        E        F
   ------------------------------------------------------------------------
-  GJ_3090               26.0%    18.7%    27.7%    26.6%    21.6%     8.7%
-  GJ_3470               23.6%    11.6%    27.1%    26.1%    21.9%     8.5%
-  HAT-P-11              26.1%    17.7%    28.1%    23.7%    19.9%     7.0%
-  HAT-P-12              25.9%    17.1%    28.0%    26.3%    20.1%     8.0%
-  HAT-P-18              26.6%    16.2%    29.1%    26.5%    20.4%     8.1%
-  HAT-P-26              25.4%    11.4%    28.9%    27.7%    23.7%     9.8%
-  HD_73583              25.8%    15.5%    28.2%    27.5%    20.5%     8.7%
-  L_98-59               24.9%    18.3%    26.4%    26.1%    24.2%     9.9%
-  TOI-2076              26.1%    16.8%    28.3%    26.6%    20.1%     8.0%
-  TOI-244               26.2%    18.3%    28.1%    27.3%    20.9%     8.8%
-  TOI-270               25.0%    18.2%    26.6%    24.1%    21.0%     7.0%
-  TOI-3629              26.1%    16.9%    28.3%    27.2%    19.7%     8.3%
-  TOI-3884              24.3%    11.1%    27.9%    26.7%    22.5%     9.3%
-  TOI-674               25.8%    18.1%    27.6%    26.9%    20.6%     9.1%
-  TOI-942               25.7%    16.2%    28.0%    26.8%    19.9%     7.5%
-  WASP-107              22.6%    12.1%    24.8%    24.6%    21.0%     8.9%
-  WASP-52               25.4%    11.4%    28.6%    27.2%    22.8%     9.5%
-  WASP-69               23.7%    11.9%    26.6%    26.2%    22.8%     9.5%
-  WASP-80               24.8%    12.0%    28.3%    27.6%    23.8%     9.9%
+  GJ_3090               26.0%    18.7%    26.3%    25.2%    20.2%     8.7%
+  GJ_3470               23.6%    11.6%    26.3%    25.3%    21.1%     8.5%
+  HAT-P-11              26.1%    17.7%    25.8%    22.8%    18.8%     6.9%
+  HAT-P-12              25.9%    17.1%    26.4%    25.7%    19.6%     8.1%
+  HAT-P-18              26.6%    16.2%    23.9%    22.8%    18.5%     8.0%
+  HAT-P-26              25.4%    11.4%    26.6%    25.6%    22.4%     9.8%
+  HD_73583              25.8%    15.5%    26.5%    26.0%    19.1%     8.8%
+  L_98-59               24.9%    18.3%    24.8%    24.5%    22.6%     9.7%
+  TOI-2076              26.1%    16.8%    26.5%    25.9%    19.7%     8.0%
+  TOI-244               26.2%    18.3%    26.6%    25.8%    19.4%     8.9%
+  TOI-270               25.0%    18.2%    25.5%    22.9%    19.9%     6.7%
+  TOI-3629              26.1%    16.9%    26.5%    26.1%    18.7%     8.4%
+  TOI-3884              24.3%    11.1%    26.2%    25.3%    21.7%     9.4%
+  TOI-674               25.8%    18.1%    25.8%    25.2%    18.9%     9.2%
+  TOI-942               25.7%    16.2%    27.6%    26.5%    19.5%     7.5%
+  WASP-107              22.6%    12.1%    23.3%    23.1%    20.0%     9.0%
+  WASP-52               25.4%    11.4%    26.7%    25.5%    21.9%     9.5%
+  WASP-69               23.7%    11.9%    24.8%    24.5%    21.6%     9.5%
+  WASP-80               24.8%    12.0%    25.7%    25.4%    22.3%     9.9%
 
 
   IMPACT vs BASELINE (A_baseline_86):
@@ -157,16 +157,16 @@
       Total schedulable transits: 856 (baseline: 856, delta: +0)
 
     D_daynight_ST_moderate: Day/night 110°/80° + moderate ST (Sun=45°, Moon=20°, Limb=10°, 1 req)
-      Improved: 0  Same: 20  Degraded: 0
-      Total schedulable transits: 856 (baseline: 856, delta: +0)
+      Improved: 0  Same: 19  Degraded: 1
+      Total schedulable transits: 855 (baseline: 856, delta: -1)
 
     E_daynight_ST_strict: Day/night 110°/80° + strict ST (Sun=60°, Moon=30°, Limb=20°, 1 req)
-      Improved: 0  Same: 20  Degraded: 0
-      Total schedulable transits: 856 (baseline: 856, delta: +0)
+      Improved: 0  Same: 18  Degraded: 2
+      Total schedulable transits: 852 (baseline: 856, delta: -4)
 
     F_daynight_ST_strict_both: Day/night 110°/80° + strict ST (Sun=60°, Moon=30°, Limb=20°, 2 req)
       Improved: 0  Same: 0  Degraded: 20
-      Total schedulable transits: 341 (baseline: 856, delta: -515)
+      Total schedulable transits: 351 (baseline: 856, delta: -505)
 
 
   DAY/NIGHT BENEFIT (C vs B — same day angle, relaxed night):
