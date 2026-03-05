@@ -30,7 +30,7 @@
   "# Keepout / avoidance angles (degrees)": null,
   "visibility_sun_deg": 91.0,
   "visibility_moon_deg": 25.0,
-  "visibility_earth_deg": 86.0,
+  "visibility_earth_deg": 96.0,
 
   "# Other scheduling thresholds": null,
   "commissioning_days": 0,
@@ -43,7 +43,7 @@
 
   "# Extra inputs used by pipeline (paths and small flags)": null,
   "extra_inputs": {
-    "target_definition_base": "/path/to/PandoraTargetList/target_definition_files",
+    "target_definition_base": "/Users/vkostov/Documents/GitHub/PandoraTargetList/target_definition_files",
     "target_definition_files": [
       "exoplanet",
       "auxiliary-standard",
@@ -51,7 +51,7 @@
       "occultation-standard"
     ],
     "generate_visibility": true,
-    "visibility_gmat": "src/pandorascheduler/data/Pandora-600km-withoutdrag-20251018.txt",
+    "visibility_gmat": "/Users/vkostov/Documents/GitHub/pandora-scheduler/gmat/PAN-GMAT-COM-20260303-VF-20260303-EX-20270403-R001.txt",
     "visibility_output_root": null,
     "skip_manifests": false
   }
