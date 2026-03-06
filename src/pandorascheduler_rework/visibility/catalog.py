@@ -8,6 +8,8 @@ from typing import Iterable
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 from astropy import units as u
 from astropy.coordinates import EarthLocation, SkyCoord
 from astropy.time import Time
@@ -23,6 +25,31 @@ from .geometry import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _visibility_metadata(config: PandoraSchedulerConfig) -> dict[bytes, bytes]:
+    return {
+        b"pandora.visibility_sun_deg": str(float(config.sun_avoidance_deg)).encode(),
+        b"pandora.visibility_moon_deg": str(float(config.moon_avoidance_deg)).encode(),
+        b"pandora.visibility_earth_deg": str(float(config.earth_avoidance_deg)).encode(),
+    }
+
+
+def _write_visibility_parquet(
+    dataframe: pd.DataFrame, output_path: Path, config: PandoraSchedulerConfig
+) -> None:
+    """Write parquet and embed keepout-angle metadata in schema."""
+    table = pa.Table.from_pandas(dataframe, preserve_index=False)
+    merged_meta = dict(table.schema.metadata or {})
+    merged_meta.update(_visibility_metadata(config))
+    table = table.replace_schema_metadata(merged_meta)
+    pq.write_table(
+        table,
+        output_path,
+        compression="snappy",
+        write_statistics=False,
+        use_dictionary=False,
+    )
 
 
 def build_visibility_catalog(
@@ -79,14 +106,7 @@ def build_visibility_catalog(
                     visibility_df["Time(MJD_UTC)"], 6
                 )
 
-            visibility_df.to_parquet(
-                output_path,
-                index=False,
-                engine="pyarrow",
-                compression="snappy",
-                write_statistics=False,
-                use_dictionary=False,
-            )
+            _write_visibility_parquet(visibility_df, output_path, config)
     else:
         # Still need star_metadata for planet transits
         star_metadata = _build_star_metadata(target_manifest)
@@ -114,7 +134,7 @@ def build_visibility_catalog(
             )
         )
 
-    _apply_transit_overlaps(generated_planets, output_root)
+    _apply_transit_overlaps(generated_planets, output_root, config)
 
 
 def _load_target_manifest(
@@ -300,14 +320,7 @@ def _build_planet_transits(
             star_metadata,
             observer_location,
         )
-        planet_df.to_parquet(
-            planet_output,
-            index=False,
-            engine="pyarrow",
-            compression="snappy",
-            write_statistics=False,
-            use_dictionary=False,
-        )
+        _write_visibility_parquet(planet_df, planet_output, config)
         if not planet_df.empty:
             generated.append((star_name, planet_name))
 
@@ -492,6 +505,7 @@ def _compute_planet_transits(
 def _apply_transit_overlaps(
     generated_planets: Iterable[tuple[str, str]],
     output_root: Path,
+    config: PandoraSchedulerConfig,
 ) -> None:
     star_planets: dict[str, list[str]] = {}
     for star_name, planet_name in generated_planets:
@@ -613,11 +627,4 @@ def _apply_transit_overlaps(
             planet_path = (
                 output_root / star_name / planet / f"Visibility for {planet}.parquet"
             )
-            df.to_parquet(
-                planet_path,
-                index=False,
-                engine="pyarrow",
-                compression="snappy",
-                write_statistics=False,
-                use_dictionary=False,
-            )
+            _write_visibility_parquet(df, planet_path, config)

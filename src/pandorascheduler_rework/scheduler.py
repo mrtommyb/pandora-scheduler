@@ -98,8 +98,10 @@ class SchedulerPaths:
     baseline_dir: Path
 
     @classmethod
-    def from_package_root(cls, package_dir: Path) -> "SchedulerPaths":
-        data_dir = package_dir / "data"
+    def from_package_root(
+        cls, package_dir: Path, data_subdir: str = "data"
+    ) -> "SchedulerPaths":
+        data_dir = package_dir / data_subdir
         return cls(
             package_dir=package_dir,
             data_dir=data_dir,

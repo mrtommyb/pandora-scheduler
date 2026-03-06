@@ -62,10 +62,11 @@ def build_schedule(config: PandoraSchedulerConfig) -> SchedulerResult:
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    data_subdir = _resolve_data_subdir(config)
+
     # Filesystem layout for this run. Use the run's `output_dir` as the
-    # package root so generated data lives under `<output_dir>/data` which
-    # matches the expectations of downstream components.
-    paths = SchedulerPaths.from_package_root(output_dir)
+    # package root so generated data lives under `<output_dir>/<data_subdir>`.
+    paths = SchedulerPaths.from_package_root(output_dir, data_subdir=data_subdir)
 
     # Prepare extra_inputs
     extra_inputs = config.extra_inputs
@@ -73,7 +74,7 @@ def build_schedule(config: PandoraSchedulerConfig) -> SchedulerResult:
     # When generating target manifests from a provided target definition base,
     # write the generated CSV manifests into the run's output data directory so
     # subsequent steps (visibility & calendar generation) can find them there.
-    out_data = output_dir / "data"
+    out_data = output_dir / data_subdir
 
     # We need to resolve these paths now to pass to target manifest generation
     # IMPORTANT: Use absolute paths to avoid legacy folder lookups
@@ -433,6 +434,16 @@ def _target_definition_from_csv(path: Path) -> str:
     return stem
 
 
+def _resolve_data_subdir(config: PandoraSchedulerConfig) -> str:
+    raw = config.extra_inputs.get("data_subdir")
+    if raw is not None and str(raw).strip() != "":
+        return str(raw).strip()
+    sun = int(float(config.sun_avoidance_deg))
+    moon = int(float(config.moon_avoidance_deg))
+    earth = int(float(config.earth_avoidance_deg))
+    return f"data_{sun}_{moon}_{earth}"
+
+
 def _as_bool(value: object, default: bool) -> bool:
     if value is None:
         return default
@@ -446,4 +457,3 @@ def _as_bool(value: object, default: bool) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     return default
-
