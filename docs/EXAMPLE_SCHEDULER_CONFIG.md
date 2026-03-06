@@ -62,6 +62,8 @@ Behavior flags
 - `force_regenerate` (bool, default `false`): force regeneration of intermediate files even if they already exist.
 - `use_target_list_for_occultations` (bool, default `false`): use the target list for occultation scheduling instead of a separate list.
 - `prioritise_occultations_by_slew` (bool, default `false`): prioritise occultation targets based on slew cost.
+- `generate_occultation_xml` (bool, default `true`): enable occultation-target calculations during XML generation.
+- `one_occultation_target` (bool, default `true`): enable Pass 1 in occultation assignment (single target must cover all occultation intervals). If `false`, scheduling starts directly at Pass 2.
 
 Auxiliary sorting & metadata
 - `aux_sort_key` (string, default `"sort_by_tdf_priority"`): key used to sort auxiliary targets

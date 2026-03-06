@@ -628,7 +628,16 @@ def main() -> int:
             _get_val("prioritise_occultations_by_slew", None, False)
         )
         enable_occultation_xml = _as_bool(
-            _get_val("enable_occultation_xml", None, True), True
+            _get_any(
+                ["generate_occultation_xml", "enable_occultation_xml"], None, True
+            ),
+            True,
+        )
+        enable_occultation_pass1 = _as_bool(
+            _get_any(
+                ["one_occultation_target", "enable_occultation_pass1"], None, True
+            ),
+            True,
         )
 
         commissioning_days = int(_get_val("commissioning_days", None, 0))
@@ -687,6 +696,7 @@ def main() -> int:
             use_legacy_mode=use_legacy_mode,
             primary_only_mode=primary_only_mode,
             enable_occultation_xml=enable_occultation_xml,
+            enable_occultation_pass1=enable_occultation_pass1,
             # Sorting / metadata
             aux_sort_key=aux_sort_key,
             author=author,
@@ -716,9 +726,15 @@ def main() -> int:
             config.earth_avoidance_deg,
         )
         logger.info("Data directory: %s", config.output_dir / data_subdir)
-        logger.info("GENERATE_VISIBILITY=%s", str(generate_visibility).upper())
+        logger.info("GENERATE_VISIBILITY_FILES=%s", str(generate_visibility).upper())
         logger.info("PRIMARY_ONLY_MODE=%s", str(primary_only_mode).upper())
-        logger.info("ENABLE_OCCULTATION_XML=%s", str(enable_occultation_xml).upper())
+        logger.info(
+            "GENERATE_OCCULTATION_XML=%s", str(enable_occultation_xml).upper()
+        )
+        logger.info(
+            "ONE_OCC_TARGET_FOR_ALL_INTERVALS=%s",
+            str(enable_occultation_pass1).upper(),
+        )
         logger.info("Starting scheduler pipeline...")
         if args.legacy_mode:
             logger.info("Legacy mode enabled - using MJD-based visibility filtering")

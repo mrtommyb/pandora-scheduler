@@ -240,6 +240,7 @@ def schedule_occultation_targets(
     o_df,
     o_list,
     try_occ_targets: str,
+    use_pass1: bool = True,
 ):
     starts_array = np.asarray(starts, dtype=float)
     stops_array = np.asarray(stops, dtype=float)
@@ -291,40 +292,43 @@ def schedule_occultation_targets(
         return data
 
     # PASS 1: Search for a single target that covers ALL intervals
-    for v_name in tqdm(v_names, desc=f"{description} (Pass 1)", leave=False):
-        vis_data = _get_visibility(v_name)
-        if vis_data is None:
-            continue
+    if use_pass1:
+        for v_name in tqdm(v_names, desc=f"{description} (Pass 1)", leave=False):
+            vis_data = _get_visibility(v_name)
+            if vis_data is None:
+                continue
 
-        vis_times, visibility = vis_data
+            vis_times, visibility = vis_data
 
-        # Check if visible for ALL intervals individually (less strict)
-        all_visible = True
-        for start, stop in zip(starts_array, stops_array):
-            interval_mask = (vis_times >= start) & (vis_times <= stop)
-            if interval_mask.sum() == 0:
-                all_visible = False
-                break
-            if not np.all(visibility[interval_mask] == 1):
-                all_visible = False
-                break
+            # Check if visible for ALL intervals individually (less strict)
+            all_visible = True
+            for start, stop in zip(starts_array, stops_array):
+                interval_mask = (vis_times >= start) & (vis_times <= stop)
+                if interval_mask.sum() == 0:
+                    all_visible = False
+                    break
+                if not np.all(visibility[interval_mask] == 1):
+                    all_visible = False
+                    break
 
-        if not all_visible:
-            continue
-        # Apply this target to all intervals
-        for idx, start in enumerate(starts_array):
-            schedule.loc[start, "Target"] = v_name
-            schedule.loc[start, "Visibility"] = 1
+            if not all_visible:
+                continue
+            # Apply this target to all intervals
+            for idx, start in enumerate(starts_array):
+                schedule.loc[start, "Target"] = v_name
+                schedule.loc[start, "Visibility"] = 1
 
-            match = o_list.loc[o_list["Star Name"] == v_name]
-            if not match.empty:
-                match_row = match.iloc[0]
-                o_df.loc[idx, "Target"] = v_name
-                o_df.loc[idx, "RA"] = match_row["RA"]
-                o_df.loc[idx, "DEC"] = match_row["DEC"]
-                o_df.loc[idx, "Visibility"] = 1
+                match = o_list.loc[o_list["Star Name"] == v_name]
+                if not match.empty:
+                    match_row = match.iloc[0]
+                    o_df.loc[idx, "Target"] = v_name
+                    o_df.loc[idx, "RA"] = match_row["RA"]
+                    o_df.loc[idx, "DEC"] = match_row["DEC"]
+                    o_df.loc[idx, "Visibility"] = 1
 
-        return o_df, True
+            return o_df, True
+    else:
+        LOGGER.info("%s (Pass 1): skipped", description)
 
     # PASS 2: Fill gaps with multiple targets (Greedy approach)
     for v_name in tqdm(v_names, desc=f"{description} (Pass 2)", leave=False):
@@ -372,6 +376,8 @@ def schedule_occultation_targets(
     # candidate with the highest minute-coverage fraction (if > 0) and
     # assign it. This enables splitting long occultations across multiple
     # targets when no single candidate covers the whole interval.
+    LOGGER.info("%s (Pass 3): started", description)
+    pass3_assigned = 0
     for idx, (start, stop) in enumerate(zip(starts_array, stops_array)):
         if not pd.isna(schedule.loc[start, "Target"]):
             continue
@@ -396,6 +402,7 @@ def schedule_occultation_targets(
         if best_name is not None and best_coverage > 0.0:
             schedule.loc[start, "Target"] = best_name
             schedule.loc[start, "Visibility"] = 1
+            pass3_assigned += 1
             match = o_list.loc[o_list["Star Name"] == best_name]
             if match.empty:
                 continue
@@ -410,12 +417,15 @@ def schedule_occultation_targets(
     if "Target" in o_df.columns and (
         o_df["Target"].astype(str).str.strip().ne("").any()
     ):
+        LOGGER.info("%s (Pass 3): assigned %d intervals", description, pass3_assigned)
         return o_df, True
+    LOGGER.info("%s (Pass 3): assigned %d intervals", description, pass3_assigned)
 
     # PASS 4: For intervals still unassigned, split the interval into minute
     # resolution segments and greedily assign contiguous covered runs to the
     # candidate that covers the longest run. Build a new occ_df with one row
     # per assigned segment and return it if any assignments were made.
+    LOGGER.info("%s (Pass 4): started", description)
     result_rows: list[dict] = []
     minute_scale = 1440.0
     for idx, (start, stop) in enumerate(zip(starts_array, stops_array)):
@@ -517,7 +527,9 @@ def schedule_occultation_targets(
 
     if result_rows:
         result_df = pd.DataFrame(result_rows)
+        LOGGER.info("%s (Pass 4): assigned %d segments", description, len(result_rows))
         return result_df, True
+    LOGGER.info("%s (Pass 4): assigned %d segments", description, len(result_rows))
 
     mask = schedule["Target"].isna()
     schedule.loc[mask, "Target"] = "No target"

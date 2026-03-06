@@ -151,6 +151,9 @@ class PandoraSchedulerConfig:
     enable_occultation_xml: bool = True
     """Enable occultation-target calculations during XML generation."""
 
+    enable_occultation_pass1: bool = True
+    """Enable Pass 1 in occultation target assignment (single target covers all intervals)."""
+
     # ============================================================================
     # LEGACY COMPATIBILITY
     # ============================================================================

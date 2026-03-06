@@ -584,6 +584,7 @@ class _ScienceCalendarBuilder:
                 reference_dec,
                 self.config.prioritise_occultations_by_slew,
                 excluded_targets,
+                self.config.enable_occultation_pass1,
             )
             if flag and result_df is not None:
                 return result_df, True
@@ -928,6 +929,7 @@ def _build_occultation_schedule(
     reference_dec: float,
     prioritise_by_slew: bool,
     excluded_targets: Optional[set] = None,
+    enable_pass1: bool = True,
 ) -> tuple[Optional[pd.DataFrame], bool]:
     if not starts or not stops:
         return None, False
@@ -989,6 +991,7 @@ def _build_occultation_schedule(
         occ_df,
         occ_list,
         label,
+        use_pass1=enable_pass1,
     )
     return occ_df, flag
 
