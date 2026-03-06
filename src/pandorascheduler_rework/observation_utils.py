@@ -896,7 +896,13 @@ def create_aux_list(target_definition_files: Sequence[str], package_dir):
     if not target_definition_files:
         raise ValueError("target_definition_files must contain at least one entry")
 
-    data_dir = Path(package_dir) / "data"
+    base_dir = Path(package_dir)
+    # Backward compatibility: accept either package root (containing "data/")
+    # or a direct data directory path.
+    if (base_dir / "data").is_dir():
+        data_dir = base_dir / "data"
+    else:
+        data_dir = base_dir
     csv_paths: List[Path] = []
     for name in target_definition_files:
         candidate = data_dir / f"{name}_targets.csv"

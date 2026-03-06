@@ -395,7 +395,7 @@ def _generate_target_manifests(
 
     rework_helper.create_aux_list(
         target_definition_files,
-        primary_target_csv.parent.parent,
+        primary_target_csv.parent,
     )
 
 

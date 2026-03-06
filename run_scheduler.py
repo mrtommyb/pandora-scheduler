@@ -713,6 +713,7 @@ def main() -> int:
         )
         logger.info("Data directory: %s", config.output_dir / data_subdir)
         logger.info("GENERATE_VISIBILITY=%s", str(generate_visibility).upper())
+        logger.info("PRIMARY_ONLY_MODE=%s", str(primary_only_mode).upper())
         logger.info("Starting scheduler pipeline...")
         if args.legacy_mode:
             logger.info("Legacy mode enabled - using MJD-based visibility filtering")
