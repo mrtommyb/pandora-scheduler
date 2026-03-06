@@ -322,6 +322,42 @@ class _ScienceCalendarBuilder:
             visibility_changes,
         )
 
+        if not self.config.enable_occultation_xml:
+            for change_position, change_idx in enumerate(augmented_changes):
+                if change_position == 0:
+                    segment_start = visit_times[0]
+                else:
+                    segment_start = visit_times[augmented_changes[change_position - 1] + 1]
+
+                segment_stop = visit_times[change_idx]
+                if not bool(visibility_flags[change_idx]):
+                    continue
+
+                current = segment_start
+                while current < segment_stop:
+                    next_value = min(current + self.sequence_duration, segment_stop)
+                    priority = _target_priority(
+                        priority_flag,
+                        transit_start,
+                        transit_stop,
+                        current,
+                        next_value,
+                    )
+                    observation_sequence(
+                        visit_element,
+                        f"{seq_counter:03d}",
+                        target_name,
+                        priority,
+                        current.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        ra_value,
+                        dec_value,
+                        target_info if target_info is not None else pd.DataFrame(),
+                    )
+                    seq_counter += 1
+                    current = next_value
+            return
+
         occultation_info = self._find_occultation_target(
             oc_starts,
             oc_stops,

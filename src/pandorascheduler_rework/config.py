@@ -148,6 +148,9 @@ class PandoraSchedulerConfig:
     primary_only_mode: bool = False
     """Schedule only primary targets; leave all other windows as Free Time."""
 
+    enable_occultation_xml: bool = True
+    """Enable occultation-target calculations during XML generation."""
+
     # ============================================================================
     # LEGACY COMPATIBILITY
     # ============================================================================

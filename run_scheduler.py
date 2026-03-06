@@ -627,6 +627,9 @@ def main() -> int:
         prioritise_occultations_by_slew = bool(
             _get_val("prioritise_occultations_by_slew", None, False)
         )
+        enable_occultation_xml = _as_bool(
+            _get_val("enable_occultation_xml", None, True), True
+        )
 
         commissioning_days = int(_get_val("commissioning_days", None, 0))
 
@@ -683,6 +686,7 @@ def main() -> int:
             prioritise_occultations_by_slew=prioritise_occultations_by_slew,
             use_legacy_mode=use_legacy_mode,
             primary_only_mode=primary_only_mode,
+            enable_occultation_xml=enable_occultation_xml,
             # Sorting / metadata
             aux_sort_key=aux_sort_key,
             author=author,
@@ -714,6 +718,7 @@ def main() -> int:
         logger.info("Data directory: %s", config.output_dir / data_subdir)
         logger.info("GENERATE_VISIBILITY=%s", str(generate_visibility).upper())
         logger.info("PRIMARY_ONLY_MODE=%s", str(primary_only_mode).upper())
+        logger.info("ENABLE_OCCULTATION_XML=%s", str(enable_occultation_xml).upper())
         logger.info("Starting scheduler pipeline...")
         if args.legacy_mode:
             logger.info("Legacy mode enabled - using MJD-based visibility filtering")
@@ -736,6 +741,7 @@ def main() -> int:
             xml_path = generate_science_calendar(
                 inputs=inputs,
                 config=config,
+                output_path=config.output_dir / "Pandora_science_calendar.xml",
             )
             logger.info(f"Science calendar written to: {xml_path}")
 

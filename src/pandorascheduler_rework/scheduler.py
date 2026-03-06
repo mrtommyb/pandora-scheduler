@@ -1306,6 +1306,7 @@ def _schedule_primary_target(
     saa_cover = first_row["SAA Overlap"]
     s_factor = first_row["Schedule Factor"]
     q_factor = first_row["Quality Factor"]
+    primary_comment = _primary_transit_comment(inputs.target_list, planet_name)
 
     dfs: list[pd.DataFrame] = []
 
@@ -1360,7 +1361,7 @@ def _schedule_primary_target(
                 saa_cover,
                 s_factor,
                 q_factor,
-                np.nan,
+                primary_comment,
             ]
         ],
         columns=[
@@ -1403,3 +1404,31 @@ def _schedule_primary_target(
     )
 
     return pd.concat(dfs, ignore_index=True)
+
+
+def _primary_transit_comment(target_list: pd.DataFrame, planet_name: str) -> str:
+    """Label primary scheduled targets by requested transit count.
+
+    We derive this from the manifest column `Number of Transits to Capture`,
+    which is populated from `transits_req` in exoplanet_priorities.csv.
+    """
+    if "Planet Name" not in target_list.columns:
+        return "secondary exoplanet transits"
+    if "Number of Transits to Capture" not in target_list.columns:
+        return "secondary exoplanet transits"
+
+    match = target_list.loc[target_list["Planet Name"] == planet_name]
+    if match.empty:
+        return "secondary exoplanet transits"
+
+    value = pd.to_numeric(
+        match["Number of Transits to Capture"], errors="coerce"
+    ).iloc[0]
+    if pd.isna(value):
+        return "secondary exoplanet transits"
+
+    return (
+        "primary exoplanet transits"
+        if int(round(float(value))) == 10
+        else "secondary exoplanet transits"
+    )
