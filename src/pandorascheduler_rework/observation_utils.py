@@ -270,8 +270,6 @@ def schedule_occultation_targets(
 
     base_path = Path(path) if path is not None else None
 
-    base_path = Path(path) if path is not None else None
-
     # Cache visibility data to avoid re-reading files in the second pass
     # Key: v_name, Value: (vis_times, visibility)
     visibility_cache: Dict[str, tuple[np.ndarray, np.ndarray]] = {}
@@ -304,6 +302,9 @@ def schedule_occultation_targets(
         all_visible = True
         for start, stop in zip(starts_array, stops_array):
             interval_mask = (vis_times >= start) & (vis_times <= stop)
+            if interval_mask.sum() == 0:
+                all_visible = False
+                break
             if not np.all(visibility[interval_mask] == 1):
                 all_visible = False
                 break
@@ -340,6 +341,11 @@ def schedule_occultation_targets(
         for idx, (start, stop) in enumerate(zip(starts_array, stops_array)):
             if pd.isna(schedule.loc[start, "Target"]):
                 interval_mask = (vis_times >= start) & (vis_times <= stop)
+                if interval_mask.sum() == 0:
+                    if pd.isna(schedule.loc[start, "Visibility"]):
+                        schedule.loc[start, "Visibility"] = 0
+                        o_df.loc[idx, "Visibility"] = 0
+                    continue
 
                 if np.all(visibility[interval_mask] == 1):
                     schedule.loc[start, "Target"] = v_name
@@ -399,9 +405,11 @@ def schedule_occultation_targets(
             o_df.loc[idx, "DEC"] = match_row["DEC"]
             o_df.loc[idx, "Visibility"] = 1
 
-    # If PASS 3 produced any assignments into o_df, treat this as a valid
-    # partial schedule and return it.
-    if "Target" in o_df.columns and o_df["Target"].notna().any():
+    # If PASS 3 produced any real assignments into o_df, treat this as a valid
+    # partial schedule and return it. Ignore empty-string placeholders.
+    if "Target" in o_df.columns and (
+        o_df["Target"].astype(str).str.strip().ne("").any()
+    ):
         return o_df, True
 
     # PASS 4: For intervals still unassigned, split the interval into minute

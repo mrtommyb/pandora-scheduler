@@ -946,9 +946,8 @@ def _build_occultation_schedule(
         schedule_rows, columns=["Target", "start", "stop", "RA", "DEC"]
     )
 
-    try:
-        occ_list = read_csv_cached(str(list_path))
-    except FileNotFoundError:
+    occ_list = read_csv_cached(str(list_path))
+    if occ_list is None:
         LOGGER.warning("Occultation list missing: %s", list_path)
         return None, False
 

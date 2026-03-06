@@ -33,7 +33,7 @@
   "# Keepout / avoidance angles (degrees)": null,
   "visibility_sun_deg": 91.0,
   "visibility_moon_deg": 25.0,
-  "visibility_earth_deg": 96.0,
+  "visibility_earth_deg": 86.0,
 
   "# Other scheduling thresholds": null,
   "commissioning_days": 0,
