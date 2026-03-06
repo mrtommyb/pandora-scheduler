@@ -286,13 +286,18 @@ def _maybe_generate_visibility(
     occultation_target_csv: Path,
 ) -> None:
     # Determine whether we should generate visibility.
-    # Default: True when a GMAT ephemeris is provided, or when explicitly requested.
-    generate_visibility = bool(config.gmat_ephemeris) or bool(
-        str(config.extra_inputs.get("generate_visibility", "")).lower()
-        in {"1", "true", "yes", "y"}
-    )
+    # Explicit extra_inputs.generate_visibility overrides implicit GMAT behavior:
+    #   true  -> generate
+    #   false -> skip (even if GMAT path is present)
+    #   unset -> default to generating when GMAT ephemeris is provided
+    explicit_generate_flag = config.extra_inputs.get("generate_visibility")
+    if explicit_generate_flag is None:
+        generate_visibility = bool(config.gmat_ephemeris)
+    else:
+        generate_visibility = _as_bool(explicit_generate_flag, False)
 
     if not generate_visibility:
+        LOGGER.info("Skipping visibility generation (generate_visibility=False)")
         return
 
     # 1. Primary Targets -> data/targets
@@ -441,5 +446,4 @@ def _as_bool(value: object, default: bool) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     return default
-
 

@@ -217,6 +217,11 @@ def parse_args() -> argparse.Namespace:
             "scheduler exactly. Default (disabled) uses improved datetime-based filtering."
         ),
     )
+    parser.add_argument(
+        "--primary-only",
+        action="store_true",
+        help="Schedule only primary targets; leave non-primary windows as Free Time.",
+    )
 
     return parser.parse_args()
 
@@ -481,6 +486,20 @@ def main() -> int:
                     return json_config[key]
             return default
 
+        def _as_bool(value: Any, default: bool = False) -> bool:
+            if value is None:
+                return default
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized == "":
+                    return default
+                return normalized in {"1", "true", "yes", "y", "on"}
+            if isinstance(value, (int, float)):
+                return bool(value)
+            return default
+
         # Default weights if not provided
         transit_scheduling_weights = (0.8, 0.0, 0.2)
 
@@ -505,15 +524,13 @@ def main() -> int:
             )
             return 1
 
-        # Determine whether visibility generation was requested (CLI or JSON)
-        generate_visibility = bool(args.generate_visibility) or (
-            str(
-                extra_inputs.get(
-                    "generate_visibility", json_config.get("generate_visibility", "")
-                )
-            ).lower()
-            in {"1", "true", "yes", "y"}
-        )
+        # Determine whether visibility generation is effectively enabled.
+        # Explicit `extra_inputs.generate_visibility` overrides implicit GMAT behavior.
+        explicit_generate_visibility = extra_inputs.get("generate_visibility")
+        if explicit_generate_visibility is None:
+            generate_visibility = bool(args.generate_visibility) or bool(visibility_gmat)
+        else:
+            generate_visibility = _as_bool(explicit_generate_visibility, False)
         # `config` is not yet constructed here, so check the CLI/ENV visibility GMAT
         if generate_visibility and visibility_gmat is None:
             logger.warning(
@@ -613,6 +630,10 @@ def main() -> int:
 
         show_progress = bool(_get_val("show_progress", args.show_progress, False))
         use_legacy_mode = bool(_get_any(["use_legacy_mode", "legacy_mode"], args.legacy_mode, False))
+        primary_only_mode = _as_bool(
+            _get_any(["primary_only_mode", "primary_only"], args.primary_only, False),
+            False,
+        )
 
         aux_sort_key = str(_get_val("aux_sort_key", None, "sort_by_tdf_priority"))
         author = _get_val("author", None, None)
@@ -659,6 +680,7 @@ def main() -> int:
             use_target_list_for_occultations=use_target_list_for_occultations,
             prioritise_occultations_by_slew=prioritise_occultations_by_slew,
             use_legacy_mode=use_legacy_mode,
+            primary_only_mode=primary_only_mode,
             # Sorting / metadata
             aux_sort_key=aux_sort_key,
             author=author,
@@ -681,6 +703,13 @@ def main() -> int:
                 )
 
         # 4. Run Scheduler (using new API)
+        logger.info(
+            "Keepout angles (deg): sun=%.1f, moon=%.1f, earth=%.1f",
+            config.sun_avoidance_deg,
+            config.moon_avoidance_deg,
+            config.earth_avoidance_deg,
+        )
+        logger.info("GENERATE_VISIBILITY=%s", str(generate_visibility).upper())
         logger.info("Starting scheduler pipeline...")
         if args.legacy_mode:
             logger.info("Legacy mode enabled - using MJD-based visibility filtering")

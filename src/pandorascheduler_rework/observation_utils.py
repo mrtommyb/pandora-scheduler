@@ -656,9 +656,12 @@ def check_if_transits_in_obs_window(
     short_visit_threshold_hours: float = 12.0,
     short_visit_edge_buffer_hours: float = 1.5,
     long_visit_edge_buffer_hours: float = 4.0,
+    use_legacy_mode: bool = False,
 ):
 
     result_df = temp_df.copy()
+    obs_window_start = obs_rng[0]
+    obs_window_stop = obs_rng[-1]
     columns = [
         "Planet Name",
         "RA",
@@ -814,13 +817,22 @@ def check_if_transits_in_obs_window(
             if window_start > window_stop:
                 continue
 
-            start_range = pd.date_range(window_start, window_stop, freq="min")
-            overlap_times = obs_rng.intersection(start_range)
-            if overlap_times.empty:
-                continue
+            if use_legacy_mode:
+                # Legacy path: preserve historical minute-grid intersection behavior.
+                start_range = pd.date_range(window_start, window_stop, freq="min")
+                overlap_times = obs_rng.intersection(start_range)
+                if overlap_times.empty:
+                    continue
+                obs_start = overlap_times[0]
+            else:
+                # Fast path: interval arithmetic avoids building/intersecting minute ranges.
+                overlap_start = max(pd.Timestamp(window_start), obs_window_start)
+                overlap_stop = min(pd.Timestamp(window_stop), obs_window_stop)
+                if overlap_start > overlap_stop:
+                    continue
+                obs_start = overlap_start
 
-            obs_start = overlap_times[0]
-            gap_time = obs_start - obs_rng[0]
+            gap_time = obs_start - obs_window_start
             # Use per-target visit duration for schedule factor normalization
             schedule_factor = 1 - (gap_time / visit_duration)
             transit_coverage = float(coverage_values[j])

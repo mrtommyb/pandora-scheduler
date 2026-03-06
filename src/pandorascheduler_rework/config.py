@@ -145,6 +145,9 @@ class PandoraSchedulerConfig:
     prioritise_occultations_by_slew: bool = False
     """Prioritize occultation targets by slew angle."""
 
+    primary_only_mode: bool = False
+    """Schedule only primary targets; leave all other windows as Free Time."""
+
     # ============================================================================
     # LEGACY COMPATIBILITY
     # ============================================================================

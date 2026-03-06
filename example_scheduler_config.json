@@ -24,13 +24,15 @@
 
   "# Behavior flags": null,
   "force_regenerate": false,
+  "use_legacy_mode": false,
+  "primary_only_mode": false,
   "use_target_list_for_occultations": false,
   "prioritise_occultations_by_slew": false,
 
   "# Keepout / avoidance angles (degrees)": null,
   "visibility_sun_deg": 91.0,
   "visibility_moon_deg": 25.0,
-  "visibility_earth_deg": 96.0,
+  "visibility_earth_deg": 86.0,
 
   "# Other scheduling thresholds": null,
   "commissioning_days": 0,

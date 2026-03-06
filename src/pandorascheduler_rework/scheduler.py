@@ -247,6 +247,7 @@ def run_scheduler(
             short_visit_threshold_hours=config.short_visit_threshold_hours,
             short_visit_edge_buffer_hours=config.short_visit_edge_buffer_hours,
             long_visit_edge_buffer_hours=config.long_visit_edge_buffer_hours,
+            use_legacy_mode=config.use_legacy_mode,
         )
 
         too_result = _handle_targets_of_opportunity(
@@ -669,6 +670,8 @@ def _handle_targets_of_opportunity(
 
     schedule_parts: list[pd.DataFrame] = []
     forced_observation = False
+    obs_window_start = obs_range[0]
+    obs_window_stop = obs_range[-1]
 
     # Batch-load all transit windows once
     # all_active_names = tracker.loc[positive_needed].index
@@ -699,14 +702,20 @@ def _handle_targets_of_opportunity(
         if early_start > late_start:
             continue
 
-        start_range = pd.date_range(early_start, late_start, freq="min")
-        overlap_times = obs_range.intersection(start_range)
-
-        if len(overlap_times) == 0:
-            continue
+        if config.use_legacy_mode:
+            start_range = pd.date_range(early_start, late_start, freq="min")
+            overlap_times = obs_range.intersection(start_range)
+            if len(overlap_times) == 0:
+                continue
+            forced_start = overlap_times[0].to_pydatetime()
+        else:
+            overlap_start = max(pd.Timestamp(early_start), obs_window_start)
+            overlap_stop = min(pd.Timestamp(late_start), obs_window_stop)
+            if overlap_start > overlap_stop:
+                continue
+            forced_start = overlap_start.to_pydatetime()
 
         forced_observation = True
-        forced_start = overlap_times[0].to_pydatetime()
 
         if obs_range[0].to_pydatetime() < forced_start:
             free_df = pd.DataFrame(
@@ -777,10 +786,15 @@ def _handle_targets_of_opportunity(
         if early_start > late_start:
             continue
 
-        start_range = pd.date_range(early_start, late_start, freq="min")
-        overlap_times = obs_range.intersection(start_range)
+        if config.use_legacy_mode:
+            start_range = pd.date_range(early_start, late_start, freq="min")
+            overlap_exists = len(obs_range.intersection(start_range)) > 0
+        else:
+            overlap_start = max(pd.Timestamp(early_start), obs_window_start)
+            overlap_stop = min(pd.Timestamp(late_start), obs_window_stop)
+            overlap_exists = overlap_start <= overlap_stop
 
-        if len(overlap_times) > 0 and tf_ratio > 1:
+        if overlap_exists and tf_ratio > 1:
             tf_warning_messages.append(
                 f"Warning: {planet_name} has MTRM > 1 and is transiting during ToO."
             )
@@ -826,6 +840,13 @@ def _schedule_auxiliary_target(
     state: SchedulerState,
     inputs: SchedulerInputs,
 ) -> tuple[pd.DataFrame, str]:
+    if config.primary_only_mode:
+        result = pd.DataFrame(
+            [["Free Time", start, stop, float("nan"), float("nan")]],
+            columns=["Target", "Observation Start", "Observation Stop", "RA", "DEC"],
+        )
+        return result, "Primary-only mode enabled; leaving remaining window as Free Time."
+
     # `obs_range` was previously created here but not used; remove to satisfy lint
     active_start = start
     scheduled_rows: list[list] = []
