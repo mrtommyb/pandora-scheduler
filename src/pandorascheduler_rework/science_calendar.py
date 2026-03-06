@@ -106,20 +106,28 @@ class _ScienceCalendarBuilder:
         or the required column is missing.
         """
         if self.occ_catalog is None or self.occ_catalog.empty:
+            if self.config.use_target_list_for_occultations:
+                return timedelta.max
             raise ValueError(
                 f"Cannot get time limit for occultation target '{target_name}': "
                 "occultation catalog is not loaded"
             )
         match = self.occ_catalog[self.occ_catalog["Star Name"] == target_name]
         if match.empty:
+            if self.config.use_target_list_for_occultations:
+                return timedelta.max
             raise ValueError(f"Occultation target '{target_name}' not found in catalog")
         if "Number of Hours Requested" not in match.columns:
+            if self.config.use_target_list_for_occultations:
+                return timedelta.max
             raise ValueError(
                 "Occultation catalog is missing required 'Number of Hours Requested' "
                 "column"
             )
         hours_req = match.iloc[0]["Number of Hours Requested"]
         if pd.isna(hours_req):
+            if self.config.use_target_list_for_occultations:
+                return timedelta.max
             raise ValueError(
                 f"Occultation target '{target_name}' has missing "
                 "'Number of Hours Requested' value"
@@ -556,13 +564,20 @@ class _ScienceCalendarBuilder:
 
         candidates: List[Tuple[Path, str, Path]] = [
             (
+                self.data_dir / "exoplanet_targets.csv",
+                "target list",
+                self.data_dir / "targets",
+            ),
+            (
                 self.data_dir / "occultation-standard_targets.csv",
                 "occ list",
                 self.data_dir / "aux_targets",
             ),
         ]
-        if not self.config.use_target_list_for_occultations:
-            candidates.reverse()
+        if self.config.use_target_list_for_occultations:
+            ordered_candidates = candidates
+        else:
+            ordered_candidates = list(reversed(candidates))
 
         # Build set of targets that have exceeded their time limit
         excluded_targets = {
@@ -571,7 +586,7 @@ class _ScienceCalendarBuilder:
             if obs_time >= self._get_occultation_time_limit(name)
         }
 
-        for csv_path, label, vis_root in candidates:
+        for csv_path, label, vis_root in ordered_candidates:
             result_df, flag = _build_occultation_schedule(
                 expanded_starts,
                 expanded_stops,

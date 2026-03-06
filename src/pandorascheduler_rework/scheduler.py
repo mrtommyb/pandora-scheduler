@@ -844,15 +844,29 @@ def _schedule_auxiliary_target(
 ) -> tuple[pd.DataFrame, str]:
     if config.primary_only_mode:
         result = pd.DataFrame(
-            [["Free Time", start, stop, float("nan"), float("nan")]],
-            columns=["Target", "Observation Start", "Observation Stop", "RA", "DEC"],
+            [["Free Time", start, stop, float("nan"), float("nan"), ""]],
+            columns=[
+                "Target",
+                "Observation Start",
+                "Observation Stop",
+                "RA",
+                "DEC",
+                "Comments",
+            ],
         )
         return result, "Primary-only mode enabled; leaving remaining window as Free Time."
 
     # `obs_range` was previously created here but not used; remove to satisfy lint
     active_start = start
     scheduled_rows: list[list] = []
-    row_columns = ["Target", "Observation Start", "Observation Stop", "RA", "DEC"]
+    row_columns = [
+        "Target",
+        "Observation Start",
+        "Observation Stop",
+        "RA",
+        "DEC",
+        "Comments",
+    ]
 
     obs_std_duration = timedelta(hours=config.std_obs_duration_hours)
     if (
@@ -931,9 +945,7 @@ def _schedule_auxiliary_target(
 
         std_name, std_ra, std_dec, priority_std = std_candidate
         std_end = active_start + obs_std_duration
-        scheduled_rows.append(
-            [f"{std_name} STD", active_start, std_end, std_ra, std_dec]
-        )
+        scheduled_rows.append([f"{std_name} STD", active_start, std_end, std_ra, std_dec, ""])
         active_start = std_end
         state.last_std_obs = active_start
 
@@ -955,7 +967,7 @@ def _schedule_auxiliary_target(
             stop,
         )
         scheduled_rows.append(
-            ["Free Time", active_start, stop, float("nan"), float("nan")]
+            ["Free Time", active_start, stop, float("nan"), float("nan"), ""]
         )
         result = pd.DataFrame(scheduled_rows, columns=row_columns)
         for record in result.to_dict(orient="records"):
@@ -972,7 +984,7 @@ def _schedule_auxiliary_target(
 
     if config.aux_sort_key is None:
         scheduled_rows.append(
-            ["Free Time", active_start, stop, float("nan"), float("nan")]
+            ["Free Time", active_start, stop, float("nan"), float("nan"), ""]
         )
         result = pd.DataFrame(scheduled_rows, columns=row_columns)
         for record in result.to_dict(orient="records"):
@@ -992,6 +1004,7 @@ def _schedule_auxiliary_target(
     log_info = "No fuly or partially visible non-primary targets, Free Time..."
     selected_requested_hours: float | None = None
     selected_observed_hours: float | None = None
+    selected_comment = ""
     fallback_over_requested_used = False
     non_primary_priorities = {
         name: stats.last_priority
@@ -1153,14 +1166,15 @@ def _schedule_auxiliary_target(
             elif vis_any:
                 any_idx = int(np.asarray(vis_percentages).argmax())
                 best_visibility = vis_percentages[any_idx]
-                if best_visibility >= 100 * config.min_visibility:
-                    chosen_idx = vis_any[any_idx]
-                else:
+                chosen_idx = vis_any[any_idx]
+                if best_visibility < 100 * config.min_visibility:
                     logger.warning(
-                        "No non-primary target with visibility greater than %.2f%% from %s",
+                        "Best non-primary visibility %.2f%% is below min_visibility %.2f%% for %s; scheduling best available target anyway",
+                        best_visibility,
                         100 * config.min_visibility,
                         target_def,
                     )
+                    selected_comment = f"Visibility = {best_visibility:.2f}%"
 
             if chosen_idx is None:
                 continue
@@ -1187,7 +1201,9 @@ def _schedule_auxiliary_target(
                     f"{name} scheduled with {float(best_visibility or 0.0):.2f}% visibility"
                 )
 
-            scheduled_rows.append([name, active_start, stop, ra_val, dec_val])
+            scheduled_rows.append(
+                [name, active_start, stop, ra_val, dec_val, selected_comment]
+            )
             logger.info(
                 "%s scheduled for non-primary observations from %s",
                 name,
@@ -1198,7 +1214,7 @@ def _schedule_auxiliary_target(
 
     if selected_row is None:
         scheduled_rows.append(
-            ["Free Time", active_start, stop, float("nan"), float("nan")]
+            ["Free Time", active_start, stop, float("nan"), float("nan"), ""]
         )
     else:
         name = selected_row[0]

@@ -375,15 +375,19 @@ def _generate_target_manifests(
     occultation_target_csv: Path,
 ) -> None:
     mapping = {
-        0: primary_target_csv,
-        1: auxiliary_target_csv,
-        2: monitoring_target_csv,
-        3: occultation_target_csv,
+        "exoplanet": primary_target_csv,
+        "auxiliary-standard": auxiliary_target_csv,
+        "monitoring-standard": monitoring_target_csv,
+        "occultation-standard": occultation_target_csv,
     }
 
-    for index, category in enumerate(target_definition_files):
-        destination = mapping.get(index)
+    for category in target_definition_files:
+        destination = mapping.get(str(category))
         if destination is None:
+            LOGGER.warning(
+                "Skipping unsupported target definition category %r while generating manifests",
+                category,
+            )
             continue
 
         manifest = rework_helper.process_target_files(

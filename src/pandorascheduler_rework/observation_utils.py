@@ -317,14 +317,14 @@ def schedule_occultation_targets(
             for idx, start in enumerate(starts_array):
                 schedule.loc[start, "Target"] = v_name
                 schedule.loc[start, "Visibility"] = 1
+                o_df.loc[idx, "Target"] = v_name
+                o_df.loc[idx, "Visibility"] = 1
 
                 match = o_list.loc[o_list["Star Name"] == v_name]
                 if not match.empty:
                     match_row = match.iloc[0]
-                    o_df.loc[idx, "Target"] = v_name
                     o_df.loc[idx, "RA"] = match_row["RA"]
                     o_df.loc[idx, "DEC"] = match_row["DEC"]
-                    o_df.loc[idx, "Visibility"] = 1
 
             return o_df, True
     else:
@@ -354,15 +354,15 @@ def schedule_occultation_targets(
                 if np.all(visibility[interval_mask] == 1):
                     schedule.loc[start, "Target"] = v_name
                     schedule.loc[start, "Visibility"] = 1
+                    o_df.loc[idx, "Target"] = v_name
+                    o_df.loc[idx, "Visibility"] = 1
 
                     match = o_list.loc[o_list["Star Name"] == v_name]
                     if match.empty:
                         continue
                     match_row = match.iloc[0]
-                    o_df.loc[idx, "Target"] = v_name
                     o_df.loc[idx, "RA"] = match_row["RA"]
                     o_df.loc[idx, "DEC"] = match_row["DEC"]
-                    o_df.loc[idx, "Visibility"] = 1
                 else:
                     if pd.isna(schedule.loc[start, "Visibility"]):
                         schedule.loc[start, "Visibility"] = 0
@@ -403,20 +403,18 @@ def schedule_occultation_targets(
             schedule.loc[start, "Target"] = best_name
             schedule.loc[start, "Visibility"] = 1
             pass3_assigned += 1
+            o_df.loc[idx, "Target"] = best_name
+            o_df.loc[idx, "Visibility"] = 1
             match = o_list.loc[o_list["Star Name"] == best_name]
             if match.empty:
                 continue
             match_row = match.iloc[0]
-            o_df.loc[idx, "Target"] = best_name
             o_df.loc[idx, "RA"] = match_row["RA"]
             o_df.loc[idx, "DEC"] = match_row["DEC"]
-            o_df.loc[idx, "Visibility"] = 1
 
-    # If PASS 3 produced any real assignments into o_df, treat this as a valid
-    # partial schedule and return it. Ignore empty-string placeholders.
-    if "Target" in o_df.columns and (
-        o_df["Target"].astype(str).str.strip().ne("").any()
-    ):
+    # PASS 3 may partially fill intervals. Only finish here when all intervals
+    # are assigned; otherwise continue to PASS 4 to segment/fill the remainder.
+    if not schedule["Target"].isna().any():
         LOGGER.info("%s (Pass 3): assigned %d intervals", description, pass3_assigned)
         return o_df, True
     LOGGER.info("%s (Pass 3): assigned %d intervals", description, pass3_assigned)
