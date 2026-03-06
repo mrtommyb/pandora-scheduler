@@ -597,6 +597,8 @@ def main() -> int:
                 ["earth_avoidance_deg", "visibility_earth_deg"], args.earth_avoidance, 86.0
             )
         )
+        data_subdir = f"data_{int(sun_avoid)}_{int(moon_avoid)}_{int(earth_avoid)}"
+        extra_inputs["data_subdir"] = data_subdir
 
         short_visit_threshold_hours = float(
             _get_val("short_visit_threshold_hours", None, 12.0)
@@ -647,7 +649,7 @@ def main() -> int:
             window_start=parse_datetime(args.start),
             window_end=parse_datetime(args.end),
             schedule_step=timedelta(hours=schedule_step_hours),
-            targets_manifest=args.output / "data",
+            targets_manifest=args.output / data_subdir,
             gmat_ephemeris=gmat_path,
             output_dir=args.output,
             # Scheduling Thresholds
@@ -709,6 +711,7 @@ def main() -> int:
             config.moon_avoidance_deg,
             config.earth_avoidance_deg,
         )
+        logger.info("Data directory: %s", config.output_dir / data_subdir)
         logger.info("GENERATE_VISIBILITY=%s", str(generate_visibility).upper())
         logger.info("Starting scheduler pipeline...")
         if args.legacy_mode:
@@ -721,7 +724,8 @@ def main() -> int:
             # Use the same config object to create calendar settings
             # Ensure we point to the correct data directory (where manifests are)
             # The pipeline copies/generates data into output_dir/data
-            data_dir = config.output_dir / "data"
+            data_dir_name = str(config.extra_inputs.get("data_subdir", "data"))
+            data_dir = config.output_dir / data_dir_name
 
             inputs = ScienceCalendarInputs(
                 schedule_csv=result.schedule_csv,
