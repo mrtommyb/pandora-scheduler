@@ -331,9 +331,14 @@ def schedule_occultation_targets(
         LOGGER.info("%s (Pass 1): skipped", description)
 
     # PASS 2: Fill gaps with multiple targets (Greedy approach)
+    pass2_interval_assignments = 0
     for v_name in tqdm(v_names, desc=f"{description} (Pass 2)", leave=False):
         # If schedule is full, we are done
         if not schedule["Target"].isna().any():
+            LOGGER.info(
+                "%s (Pass 2): success",
+                description,
+            )
             return o_df, True
 
         vis_data = _get_visibility(v_name)
@@ -356,6 +361,7 @@ def schedule_occultation_targets(
                     schedule.loc[start, "Visibility"] = 1
                     o_df.loc[idx, "Target"] = v_name
                     o_df.loc[idx, "Visibility"] = 1
+                    pass2_interval_assignments += 1
 
                     match = o_list.loc[o_list["Star Name"] == v_name]
                     if match.empty:
@@ -369,16 +375,45 @@ def schedule_occultation_targets(
                         o_df.loc[idx, "Visibility"] = 0
 
     if not schedule["Target"].isna().any():
+        LOGGER.info(
+            "%s (Pass 2): success",
+            description,
+        )
         return o_df, True
+    remaining_indices = np.where(schedule["Target"].isna().to_numpy())[0]
+    remaining_windows: list[str] = []
+    for rem_idx in remaining_indices:
+        rem_start = Time(starts_array[rem_idx], format="mjd", scale="utc").to_datetime()
+        rem_stop = Time(stops_array[rem_idx], format="mjd", scale="utc").to_datetime()
+        remaining_windows.append(
+            f"{rem_start.strftime('%Y-%m-%d %H:%M:%S')}..{rem_stop.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+    LOGGER.info(
+        "%s (Pass 2): %d intervals done, need %d more (%s)",
+        description,
+        pass2_interval_assignments,
+        int(remaining_indices.size),
+        ", ".join(remaining_windows),
+    )
 
     # PASS 3: Best-effort assignment for intervals not fully covered by any
     # single occultation target. For each remaining interval, choose the
     # candidate with the highest minute-coverage fraction (if > 0) and
     # assign it. This enables splitting long occultations across multiple
     # targets when no single candidate covers the whole interval.
-    LOGGER.info("%s (Pass 3): started", description)
+    LOGGER.info(
+        "%s (Pass 3): started",
+        description,
+    )
     pass3_assigned = 0
-    for idx, (start, stop) in enumerate(zip(starts_array, stops_array)):
+    for idx, (start, stop) in enumerate(
+        tqdm(
+            zip(starts_array, stops_array),
+            total=len(starts_array),
+            desc=f"{description} (Pass 3)",
+            leave=False,
+        )
+    ):
         if not pd.isna(schedule.loc[start, "Target"]):
             continue
 
@@ -425,6 +460,7 @@ def schedule_occultation_targets(
     # per assigned segment and return it if any assignments were made.
     LOGGER.info("%s (Pass 4): started", description)
     result_rows: list[dict] = []
+    uncovered_minutes_detected = False
     minute_scale = 1440.0
     for idx, (start, stop) in enumerate(zip(starts_array, stops_array)):
         if not pd.isna(schedule.loc[start, "Target"]):
@@ -460,6 +496,7 @@ def schedule_occultation_targets(
             # Find candidates that cover this minute
             available = [name for name, arr in candidate_coverages.items() if arr[i]]
             if not available:
+                uncovered_minutes_detected = True
                 i += 1
                 continue
 
@@ -488,8 +525,6 @@ def schedule_occultation_targets(
 
             # Format start/stop as ISO UTC strings
             try:
-                from astropy.time import Time
-
                 start_dt = Time(run_start_mjd, format="mjd", scale="utc").to_datetime()
                 stop_dt = Time(run_end_mjd, format="mjd", scale="utc").to_datetime()
                 start_str = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -523,10 +558,17 @@ def schedule_occultation_targets(
 
             i += best_len
 
-    if result_rows:
+    if result_rows and not uncovered_minutes_detected:
         result_df = pd.DataFrame(result_rows)
         LOGGER.info("%s (Pass 4): assigned %d segments", description, len(result_rows))
         return result_df, True
+    if result_rows and uncovered_minutes_detected:
+        LOGGER.info(
+            "%s (Pass 4): assigned %d segments (partial coverage; escalating)",
+            description,
+            len(result_rows),
+        )
+        return o_df, False
     LOGGER.info("%s (Pass 4): assigned %d segments", description, len(result_rows))
 
     mask = schedule["Target"].isna()

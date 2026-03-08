@@ -30,6 +30,7 @@
   "# Occultation XML controls: generate_occultation_xml toggles occultation filling in XML; one_occultation_target toggles Pass 1 (single target must cover all intervals).": null,
   "generate_occultation_xml": true,
   "one_occultation_target": false,
+  "strict_occultation_time_limits": false,
   "use_target_list_for_occultations": false,
   "prioritise_occultations_by_slew": false,
 

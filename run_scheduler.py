@@ -638,6 +638,9 @@ def main() -> int:
             ),
             True,
         )
+        strict_occultation_time_limits = _as_bool(
+            _get_val("strict_occultation_time_limits", None, True), True
+        )
 
         commissioning_days = int(_get_val("commissioning_days", None, 0))
 
@@ -696,6 +699,7 @@ def main() -> int:
             primary_only_mode=primary_only_mode,
             enable_occultation_xml=enable_occultation_xml,
             enable_occultation_pass1=enable_occultation_pass1,
+            strict_occultation_time_limits=strict_occultation_time_limits,
             # Sorting / metadata
             aux_sort_key=aux_sort_key,
             author=author,
@@ -733,6 +737,10 @@ def main() -> int:
         logger.info(
             "ONE_OCC_TARGET_FOR_ALL_INTERVALS=%s",
             str(enable_occultation_pass1).upper(),
+        )
+        logger.info(
+            "STRICT_OCCULTATION_TIME_LIMITS=%s",
+            str(strict_occultation_time_limits).upper(),
         )
         logger.info("Starting scheduler pipeline...")
         if args.legacy_mode:

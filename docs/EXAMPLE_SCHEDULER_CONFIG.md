@@ -64,6 +64,7 @@ Behavior flags
 - `prioritise_occultations_by_slew` (bool, default `false`): prioritise occultation targets based on slew cost.
 - `generate_occultation_xml` (bool, default `true`): enable occultation-target calculations during XML generation.
 - `one_occultation_target` (bool, default `true`): enable Pass 1 in occultation assignment (single target must cover all occultation intervals). If `false`, scheduling starts directly at Pass 2.
+- `strict_occultation_time_limits` (bool, default `true`): when `true`, exclude occultation targets that already met requested hours; when `false`, retry without exclusions if no target can be assigned.
 
 Auxiliary sorting & metadata
 - `aux_sort_key` (string, default `"sort_by_tdf_priority"`): key used to sort auxiliary targets

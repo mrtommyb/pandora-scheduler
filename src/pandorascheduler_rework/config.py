@@ -154,6 +154,9 @@ class PandoraSchedulerConfig:
     enable_occultation_pass1: bool = True
     """Enable Pass 1 in occultation target assignment (single target covers all intervals)."""
 
+    strict_occultation_time_limits: bool = True
+    """When true, never schedule occultation targets beyond requested-hour limits."""
+
     # ============================================================================
     # LEGACY COMPATIBILITY
     # ============================================================================
