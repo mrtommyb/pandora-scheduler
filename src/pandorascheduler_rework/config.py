@@ -197,6 +197,18 @@ class PandoraSchedulerConfig:
     """Prioritize occultation targets by slew angle."""
 
     # ============================================================================
+    # PARALLELISM
+    # ============================================================================
+
+    parallel_workers: int = 0
+    """Number of parallel workers for visibility generation.
+
+    0  = auto (use all available CPUs).
+    1  = serial (no multiprocessing overhead, useful for debugging).
+    N  = use exactly N worker processes.
+    """
+
+    # ============================================================================
     # LEGACY COMPATIBILITY
     # ============================================================================
 

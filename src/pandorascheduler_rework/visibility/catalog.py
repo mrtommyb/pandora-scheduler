@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import concurrent.futures
+import io
 import logging
+import multiprocessing
+import os
 from pathlib import Path
 from typing import Iterable
 
@@ -30,6 +34,48 @@ from .geometry import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Worker state for multiprocessing (set once per worker via _init_worker)
+# ---------------------------------------------------------------------------
+_worker_payload: dict | None = None
+_worker_config: PandoraSchedulerConfig | None = None
+
+
+def _init_worker(
+    payload: dict,
+    config: PandoraSchedulerConfig,
+) -> None:
+    """Initialise per-worker shared state (called once when worker starts)."""
+    global _worker_payload, _worker_config  # noqa: PLW0603
+    _worker_payload = payload
+    _worker_config = config
+
+
+def _worker_build_star(
+    star_name: str,
+    star_coord: SkyCoord,
+    is_exoplanet: bool,
+) -> tuple[str, bytes]:
+    """Build visibility for one star and return parquet bytes.
+
+    Runs inside a worker process.  Reads *_worker_payload* and
+    *_worker_config* set by :func:`_init_worker`.
+    """
+    assert _worker_payload is not None and _worker_config is not None
+    df = _build_star_visibility(_worker_payload, star_coord, _worker_config)
+    if not is_exoplanet:
+        df["Time(MJD_UTC)"] = np.round(df["Time(MJD_UTC)"], 6)
+    buf = io.BytesIO()
+    df.to_parquet(
+        buf,
+        index=False,
+        engine="pyarrow",
+        compression="snappy",
+        write_statistics=False,
+        use_dictionary=False,
+    )
+    return star_name, buf.getvalue()
 
 
 def build_visibility_catalog(
@@ -73,27 +119,85 @@ def build_visibility_catalog(
         base_payload = _build_base_payload(ephemeris, cadence)
         star_metadata = _build_star_metadata(target_manifest)
 
+        is_exoplanet = "exoplanet" in target_path.name.lower()
+
+        # Resolve coordinates up front (fast, needs star_metadata)
+        work_items: list[tuple[str, SkyCoord]] = []
         for star_name, row in stars_to_generate:
-            output_dir = output_root / star_name
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_path = output_dir / f"Visibility for {star_name}.parquet"
-
             star_coord = _resolve_star_coord(row, star_metadata)
-            visibility_df = _build_star_visibility(base_payload, star_coord, config)
+            work_items.append((star_name, star_coord))
 
-            if "exoplanet" not in target_path.name.lower():
-                visibility_df["Time(MJD_UTC)"] = np.round(
-                    visibility_df["Time(MJD_UTC)"], 6
+        n_stars = len(work_items)
+        max_workers = config.parallel_workers or (os.cpu_count() or 1)
+        n_workers = min(n_stars, max_workers)
+
+        if n_workers > 1:
+            LOGGER.info(
+                "Generating visibility for %d stars using %d workers",
+                n_stars,
+                n_workers,
+            )
+            # Use "forkserver" to avoid macOS fork-safety warnings with
+            # multi-threaded processes while still sharing base_payload
+            # efficiently via the initializer (pickled once per worker).
+            ctx = multiprocessing.get_context("forkserver")
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=n_workers,
+                mp_context=ctx,
+                initializer=_init_worker,
+                initargs=(base_payload, config),
+            ) as executor:
+                futures = {
+                    executor.submit(
+                        _worker_build_star, name, coord, is_exoplanet
+                    ): name
+                    for name, coord in work_items
+                }
+                done_count = 0
+                for future in concurrent.futures.as_completed(futures):
+                    star_name, parquet_bytes = future.result()
+                    output_dir = output_root / star_name
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    out_path = (
+                        output_dir / f"Visibility for {star_name}.parquet"
+                    )
+                    out_path.write_bytes(parquet_bytes)
+                    done_count += 1
+                    LOGGER.info(
+                        "[%d/%d] Generated visibility for %s",
+                        done_count,
+                        n_stars,
+                        star_name,
+                    )
+        else:
+            LOGGER.info(
+                "Generating visibility for %d star(s) (serial)", n_stars
+            )
+            for star_name, star_coord in work_items:
+                output_dir = output_root / star_name
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_path = (
+                    output_dir / f"Visibility for {star_name}.parquet"
                 )
 
-            visibility_df.to_parquet(
-                output_path,
-                index=False,
-                engine="pyarrow",
-                compression="snappy",
-                write_statistics=False,
-                use_dictionary=False,
-            )
+                visibility_df = _build_star_visibility(
+                    base_payload, star_coord, config
+                )
+
+                if not is_exoplanet:
+                    visibility_df["Time(MJD_UTC)"] = np.round(
+                        visibility_df["Time(MJD_UTC)"], 6
+                    )
+
+                visibility_df.to_parquet(
+                    output_path,
+                    index=False,
+                    engine="pyarrow",
+                    compression="snappy",
+                    write_statistics=False,
+                    use_dictionary=False,
+                )
+                LOGGER.info("Generated visibility for %s", star_name)
     else:
         # Still need star_metadata for planet transits
         star_metadata = _build_star_metadata(target_manifest)
