@@ -1001,7 +1001,7 @@ def _schedule_auxiliary_target(
 
     selected_row: Optional[list] = None
     priority_val = 0.0
-    log_info = "No fuly or partially visible non-primary targets, Free Time..."
+    log_info = "No fully or partially visible non-primary targets, Free Time..."
     selected_requested_hours: float | None = None
     selected_observed_hours: float | None = None
     selected_comment = ""
