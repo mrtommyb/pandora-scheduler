@@ -240,6 +240,7 @@ def schedule_occultation_targets(
     o_df,
     o_list,
     try_occ_targets: str,
+    show_progress: bool = False,
 ):
     starts_array = np.asarray(starts, dtype=float)
     stops_array = np.asarray(stops, dtype=float)
@@ -293,7 +294,7 @@ def schedule_occultation_targets(
         return data
 
     # PASS 1: Search for a single target that covers ALL intervals
-    for v_name in tqdm(v_names, desc=f"{description} (Pass 1)", leave=False):
+    for v_name in tqdm(v_names, desc=f"{description} (Pass 1)", leave=False, disable=not show_progress):
         vis_data = _get_visibility(v_name)
         if vis_data is None:
             continue
@@ -326,7 +327,7 @@ def schedule_occultation_targets(
         return o_df, True
 
     # PASS 2: Fill gaps with multiple targets (Greedy approach)
-    for v_name in tqdm(v_names, desc=f"{description} (Pass 2)", leave=False):
+    for v_name in tqdm(v_names, desc=f"{description} (Pass 2)", leave=False, disable=not show_progress):
         # If schedule is full, we are done
         if not schedule["Target"].isna().any():
             return o_df, True

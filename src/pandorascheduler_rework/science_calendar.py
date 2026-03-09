@@ -548,6 +548,7 @@ class _ScienceCalendarBuilder:
                 reference_dec,
                 self.config.prioritise_occultations_by_slew,
                 excluded_targets,
+                show_progress=self.config.show_progress,
             )
             if flag and result_df is not None:
                 return result_df, True
@@ -892,6 +893,7 @@ def _build_occultation_schedule(
     reference_dec: float,
     prioritise_by_slew: bool,
     excluded_targets: Optional[set] = None,
+    show_progress: bool = False,
 ) -> tuple[Optional[pd.DataFrame], bool]:
     if not starts or not stops:
         return None, False
@@ -954,6 +956,7 @@ def _build_occultation_schedule(
         occ_df,
         occ_list,
         label,
+        show_progress=show_progress,
     )
     return occ_df, flag
 
