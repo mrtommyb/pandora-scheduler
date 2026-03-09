@@ -1423,18 +1423,31 @@ def _schedule_primary_target(
 
 
 def _primary_transit_comment(target_list: pd.DataFrame, planet_name: str) -> str:
-    """Label primary scheduled targets by requested transit count.
+    """Label primary scheduled targets.
 
-    We derive this from the manifest column `Number of Transits to Capture`,
-    which is populated from `transits_req` in exoplanet_priorities.csv.
+    Prefer the explicit manifest column `Primary Target` when available.
+    Fall back to `Number of Transits to Capture` (from `transits_req` in
+    exoplanet_priorities.csv) to preserve legacy behaviour.
     """
     if "Planet Name" not in target_list.columns:
-        return "secondary exoplanet transits"
-    if "Number of Transits to Capture" not in target_list.columns:
         return "secondary exoplanet transits"
 
     match = target_list.loc[target_list["Planet Name"] == planet_name]
     if match.empty:
+        return "secondary exoplanet transits"
+
+    # Prefer explicit primary/secondary flag if present.
+    if "Primary Target" in target_list.columns:
+        primary_value = match["Primary Target"].iloc[0]
+        if pd.notna(primary_value):
+            flag = str(primary_value).strip().lower()
+            if flag in {"y", "yes", "true", "primary", "1"}:
+                return "primary exoplanet transits"
+            if flag in {"n", "no", "false", "secondary", "0"}:
+                return "secondary exoplanet transits"
+
+    # Fallback to legacy heuristic based on requested transit count.
+    if "Number of Transits to Capture" not in target_list.columns:
         return "secondary exoplanet transits"
 
     value = pd.to_numeric(
@@ -1443,8 +1456,9 @@ def _primary_transit_comment(target_list: pd.DataFrame, planet_name: str) -> str
     if pd.isna(value):
         return "secondary exoplanet transits"
 
+    PRIMARY_TRANSIT_COUNT_THRESHOLD = 10
     return (
         "primary exoplanet transits"
-        if int(round(float(value))) == 10
+        if int(round(float(value))) == PRIMARY_TRANSIT_COUNT_THRESHOLD
         else "secondary exoplanet transits"
     )
