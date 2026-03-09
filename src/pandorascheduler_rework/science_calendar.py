@@ -567,7 +567,7 @@ def _normalise_target_name(target: str) -> tuple[str, str]:
     if target.endswith("STD"):
         stripped = target[:-4]
         return stripped, stripped
-    if target.endswith(tuple("bcdef")) and target != "EV_Lac":
+    if target.endswith(tuple("bcdef")) and target not in ("EV_Lac", "AF_Psc"):
         return target, target[:-1].strip()
     return target, target
 

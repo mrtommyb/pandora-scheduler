@@ -7,6 +7,7 @@ import io
 import logging
 import multiprocessing
 import os
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -154,6 +155,9 @@ def build_visibility_catalog(
                     for name, coord in work_items
                 }
                 done_count = 0
+                _last_log_time = time.monotonic()
+                _log_interval = 60  # seconds between progress logs
+                _pct_step = max(1, n_stars // 10)  # log every ~10%
                 for future in concurrent.futures.as_completed(futures):
                     star_name, parquet_bytes = future.result()
                     output_dir = output_root / star_name
@@ -163,17 +167,27 @@ def build_visibility_catalog(
                     )
                     out_path.write_bytes(parquet_bytes)
                     done_count += 1
-                    LOGGER.info(
-                        "[%d/%d] Generated visibility for %s",
-                        done_count,
-                        n_stars,
-                        star_name,
-                    )
+                    now = time.monotonic()
+                    if (
+                        done_count == n_stars
+                        or done_count % _pct_step == 0
+                        or now - _last_log_time >= _log_interval
+                    ):
+                        LOGGER.info(
+                            "Visibility progress: %d/%d stars (%.0f%%)",
+                            done_count,
+                            n_stars,
+                            100.0 * done_count / n_stars,
+                        )
+                        _last_log_time = now
         else:
             LOGGER.info(
                 "Generating visibility for %d star(s) (serial)", n_stars
             )
-            for star_name, star_coord in work_items:
+            _last_log_time = time.monotonic()
+            _log_interval = 60
+            _pct_step = max(1, n_stars // 10)
+            for idx, (star_name, star_coord) in enumerate(work_items, 1):
                 output_dir = output_root / star_name
                 output_dir.mkdir(parents=True, exist_ok=True)
                 output_path = (
@@ -197,7 +211,19 @@ def build_visibility_catalog(
                     write_statistics=False,
                     use_dictionary=False,
                 )
-                LOGGER.info("Generated visibility for %s", star_name)
+                now = time.monotonic()
+                if (
+                    idx == n_stars
+                    or idx % _pct_step == 0
+                    or now - _last_log_time >= _log_interval
+                ):
+                    LOGGER.info(
+                        "Visibility progress: %d/%d stars (%.0f%%)",
+                        idx,
+                        n_stars,
+                        100.0 * idx / n_stars,
+                    )
+                    _last_log_time = now
     else:
         # Still need star_metadata for planet transits
         star_metadata = _build_star_metadata(target_manifest)

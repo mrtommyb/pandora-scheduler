@@ -835,7 +835,7 @@ def _schedule_auxiliary_target(
     if (
         active_start - state.last_std_obs
         > timedelta(days=config.std_obs_frequency_days)
-        and active_start + obs_std_duration < stop
+        and (stop - active_start).total_seconds() / 60.0 > config.min_sequence_minutes
     ):
         std_path = inputs.paths.data_dir / "monitoring-standard_targets.csv"
         std_df = read_csv_cached(str(std_path))
@@ -845,7 +845,9 @@ def _schedule_auxiliary_target(
         else:
             std_records = []
 
-        std_candidate: Optional[tuple[str, float, float, float]] = None
+        # Pre-load visibility DataFrames for all standard stars so they can
+        # be re-used when we slide the search window.
+        std_vis_cache: list[tuple[dict, pd.DataFrame]] = []
         for std_row in std_records:
             std_name = str(std_row["Star Name"])
             vis_file = build_star_visibility_path(
@@ -873,55 +875,152 @@ def _schedule_auxiliary_target(
                     f"Standard target visibility file exists but is empty: {vis_file}\n"
                     f"  Target: {std_name}"
                 )
+            std_vis_cache.append((std_row, vis))
 
-            vis_filtered = _filter_visibility_by_time(
-                vis,
-                active_start,
-                active_start + obs_std_duration,
-                use_legacy_mode=config.use_legacy_mode,
-            )
+        # ── Adaptive-duration + sliding-window STD search ──────────
+        # Try the configured duration first, then progressively shorter
+        # durations (down to min_sequence_minutes).  For each duration,
+        # slide through the gap in 1-minute increments looking for a
+        # window where at least one standard star has full visibility.
+        #
+        # When the best placement starts after the gap beginning, the
+        # STD row is extended backwards to fill the pre-STD time: the
+        # science-calendar builder will emit occultation-target
+        # observations during the non-visible prefix and STD science
+        # observations during the visible portion.  This avoids
+        # inserting Free Time into the schedule.
+        std_candidate: Optional[tuple[str, float, float, float]] = None
+        best_offset: timedelta = timedelta(0)
+        best_duration: timedelta = obs_std_duration
+        min_std_td = timedelta(minutes=config.min_sequence_minutes)
+        slide_step = timedelta(minutes=1)
 
-            if not vis_filtered.empty and vis_filtered["Visible"].all():
-                std_candidate = (
-                    std_name,
-                    float(std_row["RA"]),
-                    float(std_row["DEC"]),
-                    float(std_row["Priority"]),
+        trial_duration = obs_std_duration
+        while trial_duration >= min_std_td and std_candidate is None:
+            latest_start = stop - trial_duration
+            trial_offset = timedelta(0)
+            while active_start + trial_offset <= latest_start:
+                # Skip offsets that would create a pre-STD segment
+                # shorter than min_sequence_minutes: the calendar
+                # builder would emit a too-short occultation sequence.
+                # After trying offset=0, jump straight to min_std_td.
+                if timedelta(0) < trial_offset < min_std_td:
+                    trial_offset = min_std_td
+                    continue
+                trial_start = active_start + trial_offset
+                trial_stop = trial_start + trial_duration
+                for std_row, vis in std_vis_cache:
+                    vis_filtered = _filter_visibility_by_time(
+                        vis,
+                        trial_start,
+                        trial_stop,
+                        use_legacy_mode=config.use_legacy_mode,
+                    )
+                    if not vis_filtered.empty and vis_filtered["Visible"].all():
+                        std_candidate = (
+                            str(std_row["Star Name"]),
+                            float(std_row["RA"]),
+                            float(std_row["DEC"]),
+                            float(std_row["Priority"]),
+                        )
+                        best_offset = trial_offset
+                        best_duration = trial_duration
+                        if trial_duration < obs_std_duration:
+                            logger.warning(
+                                "%s scheduled for STD observations "
+                                "with SHORTENED duration "
+                                "(%d min instead of %d min, "
+                                "offset=+%d min into gap)",
+                                std_row["Star Name"],
+                                int(trial_duration.total_seconds() / 60),
+                                int(obs_std_duration.total_seconds() / 60),
+                                int(trial_offset.total_seconds() / 60),
+                            )
+                        elif trial_offset > timedelta(0):
+                            logger.info(
+                                "%s scheduled for STD observations "
+                                "(offset=+%d min into gap)",
+                                std_row["Star Name"],
+                                int(trial_offset.total_seconds() / 60),
+                            )
+                        else:
+                            logger.info(
+                                "%s scheduled for STD observations "
+                                "with full visibility",
+                                std_row["Star Name"],
+                            )
+                        break
+
+                if std_candidate is not None:
+                    break
+                trial_offset += slide_step
+
+            if std_candidate is None:
+                trial_duration -= slide_step
+
+        if std_candidate is not None:
+            std_name, std_ra, std_dec, priority_std = std_candidate
+
+            # The STD row always starts at active_start.  When the
+            # visible window begins later (best_offset > 0) the
+            # science-calendar builder handles the non-visible prefix
+            # via occultation-target observations.
+            std_visible_end = active_start + best_offset + best_duration
+
+            # If the post-STD remainder is shorter than min_sequence,
+            # extend the STD row to fill the entire gap so no Free Time
+            # or too-short auxiliary slot is created.
+            post_remainder = (stop - std_visible_end).total_seconds() / 60.0
+            if 0 < post_remainder <= config.min_sequence_minutes:
+                logger.warning(
+                    "Extending STD row to absorb short post-STD "
+                    "remainder (%.1f min < %d min minimum)",
+                    post_remainder,
+                    config.min_sequence_minutes,
                 )
-                logger.info(
-                    f"{std_name} scheduled for STD observations with full visibility"
-                )
-                break
+                std_row_end = stop
+            else:
+                std_row_end = std_visible_end
 
-        if std_candidate is None:
-            std_candidate = (
-                "WARNING: no visible standard star",
-                float("nan"),
-                float("nan"),
-                1.0,
+            scheduled_rows.append(
+                [f"{std_name} STD", active_start, std_row_end, std_ra, std_dec]
             )
+            active_start = std_row_end
+            state.last_std_obs = active_start
+
+            stats = state.non_primary_obs_time.setdefault(
+                "STD", AuxiliaryObservationStats()
+            )
+            stats.total_time += best_duration  # visible portion only
+            stats.last_priority = priority_std
+        else:
+            # No standard star visible at any duration or position in
+            # this gap.  Skip the STD entirely so the auxiliary target
+            # gets the full window — do NOT emit a placeholder row that
+            # would consume schedule time.
             logger.warning(
-                "No visible standard star between %s and %s",
-                active_start,
-                active_start + obs_std_duration,
+                "No visible standard star between %s and %s; "
+                "skipping STD, full gap available for auxiliary target",
+                start,
+                stop,
             )
-
-        std_name, std_ra, std_dec, priority_std = std_candidate
-        std_end = active_start + obs_std_duration
-        scheduled_rows.append(
-            [f"{std_name} STD", active_start, std_end, std_ra, std_dec]
-        )
-        active_start = std_end
-        state.last_std_obs = active_start
-
-        stats = state.non_primary_obs_time.setdefault(
-            "STD", AuxiliaryObservationStats()
-        )
-        stats.total_time += obs_std_duration
-        stats.last_priority = priority_std
 
     # Check if remaining window after STD is too short for auxiliary observation
     remaining_minutes = (stop - active_start).total_seconds() / 60.0
+    if remaining_minutes <= 0:
+        # Gap fully consumed (e.g. extended STD) — nothing more to schedule
+        result = pd.DataFrame(scheduled_rows, columns=row_columns)
+        for record in result.to_dict(orient="records"):
+            target_label = str(record["Target"])
+            if target_label == "Free Time":
+                continue
+            duration = record["Observation Stop"] - record["Observation Start"]
+            if isinstance(duration, pd.Timedelta):
+                duration = duration.to_pytimedelta()
+            state.all_target_obs_time[target_label] = (
+                state.all_target_obs_time.get(target_label, timedelta()) + duration
+            )
+        return result, "Gap fully scheduled by STD observation."
     if remaining_minutes <= config.min_sequence_minutes:
         logger.info(
             "Remaining window after STD too short (%.1f min <= %d min); "
