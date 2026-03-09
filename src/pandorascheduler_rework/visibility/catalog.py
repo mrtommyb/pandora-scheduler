@@ -524,13 +524,12 @@ def _apply_transit_overlaps(
             if not planet_path.exists():
                 all_have_overlap = False
                 break
-            # Quick check: just read the header line to see if Transit_Overlap exists
+            # Quick check via parquet schema metadata.
             try:
-                with open(planet_path, "r") as f:
-                    header = f.readline().strip()
-                    if "Transit_Overlap" not in header:
-                        all_have_overlap = False
-                        break
+                schema = pq.read_schema(planet_path)
+                if "Transit_Overlap" not in schema.names:
+                    all_have_overlap = False
+                    break
             except Exception:
                 all_have_overlap = False
                 break
@@ -551,12 +550,6 @@ def _apply_transit_overlaps(
                 )
             df = read_parquet_cached(
                 str(planet_path),
-                columns=[
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                    "SAA_Overlap",
-                ],
             )
             if df is None:
                 raise FileNotFoundError(

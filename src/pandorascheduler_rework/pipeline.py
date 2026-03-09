@@ -441,7 +441,19 @@ def _target_definition_from_csv(path: Path) -> str:
 def _resolve_data_subdir(config: PandoraSchedulerConfig) -> str:
     raw = config.extra_inputs.get("data_subdir")
     if raw is not None and str(raw).strip() != "":
-        return str(raw).strip()
+        candidate = str(raw).strip()
+        path_candidate = Path(candidate)
+        if path_candidate.is_absolute():
+            raise ValueError(
+                "extra_inputs.data_subdir must be a simple relative directory name"
+            )
+        if path_candidate.name != candidate:
+            raise ValueError(
+                "extra_inputs.data_subdir must not include path separators"
+            )
+        if candidate in {"", ".", ".."}:
+            raise ValueError("extra_inputs.data_subdir is invalid")
+        return candidate
     sun = int(float(config.sun_avoidance_deg))
     moon = int(float(config.moon_avoidance_deg))
     earth = int(float(config.earth_avoidance_deg))

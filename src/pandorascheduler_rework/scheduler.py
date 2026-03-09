@@ -1436,7 +1436,6 @@ def _primary_transit_comment(target_list: pd.DataFrame, planet_name: str) -> str
     if match.empty:
         return "secondary exoplanet transits"
 
-    # Prefer explicit primary/secondary flag if present.
     if "Primary Target" in target_list.columns:
         primary_value = match["Primary Target"].iloc[0]
         if pd.notna(primary_value):
@@ -1446,7 +1445,6 @@ def _primary_transit_comment(target_list: pd.DataFrame, planet_name: str) -> str
             if flag in {"n", "no", "false", "secondary", "0"}:
                 return "secondary exoplanet transits"
 
-    # Fallback to legacy heuristic based on requested transit count.
     if "Number of Transits to Capture" not in target_list.columns:
         return "secondary exoplanet transits"
 
