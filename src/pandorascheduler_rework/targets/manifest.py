@@ -5,6 +5,18 @@ scheme metadata from the external Pandora target list repository. The
 ``build_target_manifest`` helper assembles these artefacts into the flattened
 CSV shape expected by the scheduler while remaining agnostic to where the files
 are stored on disk.
+
+Implementation note
+-------------------
+Manifest generation is intentionally structured as four stages:
+
+1. Load raw target-definition rows from JSON and shared readout metadata.
+2. Validate required fields before row enrichment.
+3. Enrich each row with priority, identity, readout, and proper-motion data.
+4. Normalise the final DataFrame into the legacy CSV shape used downstream.
+
+Keeping these stages explicit makes the behavior easier to review in PRs and
+reduces the chance of coupling validation, business rules, and output shaping.
 """
 
 from __future__ import annotations
@@ -74,6 +86,12 @@ def build_target_manifest(
     observation_epoch
         Epoch at which proper motion should be applied when propagating
         coordinates. Defaults to 2026-01-05 to match the legacy scheduler.
+
+    Notes
+    -----
+    This is the top-level orchestration entry point only. Per-row work is
+    delegated to ``_build_manifest_row`` so that the load/validate/enrich
+    stages remain explicit and easy to diff.
     """
 
     category = category.strip()
@@ -90,19 +108,16 @@ def build_target_manifest(
     readouts = _load_readout_schemes(base_dir)
     priority_table = _load_priority_table(category_dir, category)
 
-    rows: List[MutableMapping[str, object]] = []
-    for json_path in sorted(category_dir.glob("*_target_definition.json")):
-        row = _load_target_definition(json_path)
-        row["Original Filename"] = json_path.name.replace("_target_definition.json", "")
-
-        _validate_required_target_fields(row, category)
-
-        _apply_priority(row, category, priority_table)
-        _apply_identity_columns(row, category)
-        _apply_readout_settings(row, readouts)
-        _apply_proper_motion(row, observation_epoch)
-
-        rows.append(row)
+    rows: List[MutableMapping[str, object]] = [
+        _build_manifest_row(
+            json_path,
+            category,
+            priority_table,
+            readouts,
+            observation_epoch,
+        )
+        for json_path in sorted(category_dir.glob("*_target_definition.json"))
+    ]
 
     if not rows:
         raise TargetDefinitionError(
@@ -123,6 +138,7 @@ def build_target_manifest(
 
 
 def _load_target_definition(path: Path) -> MutableMapping[str, object]:
+    """Load and flatten a single target definition JSON file."""
     with path.open("r", encoding="utf-8") as handle:
         payload: Dict[str, object] = json.load(handle)
 
@@ -131,6 +147,30 @@ def _load_target_definition(path: Path) -> MutableMapping[str, object]:
         payload.pop(key, None)
 
     return _flatten_dict(payload)
+
+
+def _build_manifest_row(
+    json_path: Path,
+    category: str,
+    priority_table: pd.DataFrame | None,
+    readouts: _ReadoutSchemes,
+    observation_epoch: Time,
+) -> MutableMapping[str, object]:
+    """Build a fully enriched manifest row from one target-definition file.
+
+    The sequence here is intentionally linear and behavior-preserving:
+    load -> validate -> enrich priority -> enrich identity -> enrich readout
+    -> propagate coordinates.
+    """
+    row = _load_target_definition(json_path)
+    row["Original Filename"] = json_path.name.replace("_target_definition.json", "")
+
+    _validate_required_target_fields(row, category)
+    _apply_priority(row, category, priority_table)
+    _populate_identity_fields(row, category)
+    _apply_readout_settings(row, readouts)
+    _apply_proper_motion(row, observation_epoch)
+    return row
 
 
 def _flatten_dict(
@@ -191,6 +231,7 @@ def _load_priority_table(category_dir: Path, category: str) -> pd.DataFrame | No
 
 
 def _read_priority_csv(path: Path) -> Tuple[Dict[str, str], pd.DataFrame]:
+    """Read a priority CSV while preserving leading ``# key: value`` metadata."""
     metadata: Dict[str, str] = {}
     data_start = 0
     with path.open("r", encoding="utf-8") as handle:
@@ -214,49 +255,66 @@ def _apply_priority(
     category: str,
     priority_table: pd.DataFrame | None,
 ) -> None:
-    filename = row.get("Original Filename")
-
+    """Populate priority-driven scheduler fields for one manifest row."""
+    match = _lookup_priority_row(row, category, priority_table)
     if category in _EXOPLANET_CATEGORIES:
-        if priority_table is None:
-            raise TargetDefinitionError(
-                f"Missing priority table for category '{category}'"
-            )
-        match = priority_table.loc[priority_table["target"] == filename]
-        if match.empty:
-            raise TargetDefinitionError(
-                f"Target '{filename}' not present in {category} priority table"
-            )
-        row["Priority"] = float(match["priority"].iloc[0])
-        row["Number of Transits to Capture"] = int(
-            round(float(match["transits_req"].iloc[0]))
+        _apply_exoplanet_priority(row, match)
+        return
+    if category in _STANDARD_CATEGORIES:
+        _apply_standard_priority(row, category, match)
+        return
+    raise TargetDefinitionError(f"Unsupported target category '{category}'")
+
+
+def _lookup_priority_row(
+    row: Mapping[str, object],
+    category: str,
+    priority_table: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """Return the matching priority-table slice for a manifest row."""
+    filename = row.get("Original Filename")
+    if priority_table is None:
+        raise TargetDefinitionError(f"Missing priority table for category '{category}'")
+    match = priority_table.loc[priority_table["target"] == filename]
+    if match.empty:
+        raise TargetDefinitionError(
+            f"Target '{filename}' not present in {category} priority table"
         )
-    elif category in _STANDARD_CATEGORIES:
-        if priority_table is None:
-            raise TargetDefinitionError(
-                f"Missing priority table for category '{category}'"
-            )
-        match = priority_table.loc[priority_table["target"] == filename]
-        if match.empty:
-            raise TargetDefinitionError(
-                f"Target '{filename}' not present in {category} priority table"
-            )
-        row["Priority"] = float(match["priority"].iloc[0])
-        # Add Number of Hours Requested from priority table (required for standard categories)
-        if "hours_req" not in match.columns:
-            raise TargetDefinitionError(
-                f"Priority table for category '{category}' is missing required 'hours_req' column"
-            )
-        hours_req_value = match["hours_req"].iloc[0]
-        if pd.isna(hours_req_value):
-            raise TargetDefinitionError(
-                f"Target '{filename}' in {category} has missing 'hours_req' value"
-            )
-        row["Number of Hours Requested"] = int(round(float(hours_req_value)))
-    else:
-        raise TargetDefinitionError(f"Unsupported target category '{category}'")
+    return match
 
 
-def _apply_identity_columns(row: MutableMapping[str, object], category: str) -> None:
+def _apply_exoplanet_priority(
+    row: MutableMapping[str, object], match: pd.DataFrame
+) -> None:
+    """Apply priority-table fields for exoplanet-like categories."""
+    row["Priority"] = float(match["priority"].iloc[0])
+    row["Number of Transits to Capture"] = int(
+        round(float(match["transits_req"].iloc[0]))
+    )
+
+
+def _apply_standard_priority(
+    row: MutableMapping[str, object], category: str, match: pd.DataFrame
+) -> None:
+    """Apply priority-table fields for standard/occultation categories."""
+    row["Priority"] = float(match["priority"].iloc[0])
+    if "hours_req" not in match.columns:
+        raise TargetDefinitionError(
+            f"Priority table for category '{category}' is missing required 'hours_req' column"
+        )
+    hours_req_value = match["hours_req"].iloc[0]
+    if pd.isna(hours_req_value):
+        filename = row.get("Original Filename")
+        raise TargetDefinitionError(
+            f"Target '{filename}' in {category} has missing 'hours_req' value"
+        )
+    row["Number of Hours Requested"] = int(round(float(hours_req_value)))
+
+
+def _populate_identity_fields(
+    row: MutableMapping[str, object], category: str
+) -> None:
+    """Populate derived name/identity fields expected by legacy CSV outputs."""
     star_name = str(row.get("Star Name", "") or "")
 
     if category in _EXOPLANET_CATEGORIES:
@@ -268,10 +326,7 @@ def _apply_identity_columns(row: MutableMapping[str, object], category: str) -> 
         else:
             row["Planet Simbad Name"] = planet_name_raw
         row["Star Simbad Name"] = star_name
-        if "Transit Epoch (BJD_TDB)" in row:
-            row["Transit Epoch (BJD_TDB-2400000.5)"] = (
-                float(row["Transit Epoch (BJD_TDB)"]) - 2400000.5
-            )
+        _apply_transit_epoch_columns(row)
     elif category == "auxiliary-standard":
         row["Planet Name"] = ""
         row["Planet Simbad Name"] = ""
@@ -282,6 +337,15 @@ def _apply_identity_columns(row: MutableMapping[str, object], category: str) -> 
         row["Star Simbad Name"] = star_name
 
 
+def _apply_transit_epoch_columns(row: MutableMapping[str, object]) -> None:
+    """Derive legacy transit-epoch columns used by downstream scheduling code."""
+    if "Transit Epoch (BJD_TDB)" not in row:
+        return
+    row["Transit Epoch (BJD_TDB-2400000.5)"] = (
+        float(row["Transit Epoch (BJD_TDB)"]) - 2400000.5
+    )
+
+
 def _format_planet_name(name: str) -> str:
     """Return planet name as-is (legacy doesn't modify planet names)."""
     return name
@@ -290,6 +354,15 @@ def _format_planet_name(name: str) -> str:
 def _apply_readout_settings(
     row: MutableMapping[str, object], readouts: _ReadoutSchemes
 ) -> None:
+    """Populate NIRDA and VDA settings from shared readout scheme metadata."""
+    _apply_nirda_settings(row, readouts)
+    _apply_vda_settings(row, readouts)
+
+
+def _apply_nirda_settings(
+    row: MutableMapping[str, object], readouts: _ReadoutSchemes
+) -> None:
+    """Expand the selected NIRDA scheme into legacy manifest columns."""
     for key, value in readouts.nirda_fixed.items():
         row[f"NIRDA_{key}"] = value
 
@@ -308,6 +381,11 @@ def _apply_readout_settings(
     for key, value in scheme.items():
         row[f"NIRDA_{key}"] = value
 
+
+def _apply_vda_settings(
+    row: MutableMapping[str, object], readouts: _ReadoutSchemes
+) -> None:
+    """Expand the selected VDA scheme into legacy manifest columns."""
     for key, value in readouts.vda_fixed.items():
         row[f"VDA_{key}"] = value
 
@@ -402,6 +480,7 @@ def _apply_proper_motion(
 
 
 def _normalise_manifest_columns(df: pd.DataFrame, category: str) -> pd.DataFrame:
+    """Reorder columns into the legacy manifest layout expected downstream."""
     columns_order: List[str]
 
     if category in _STANDARD_CATEGORIES or category == _OCCULTATION_CATEGORY:
@@ -440,6 +519,7 @@ def _normalise_manifest_columns(df: pd.DataFrame, category: str) -> pd.DataFrame
 
 
 def _standardise_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """Coerce known scheduler columns into stable numeric dtypes."""
     result = df.copy()
     numeric_int_columns = [
         "Number of Transits to Capture",
