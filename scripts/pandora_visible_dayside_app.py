@@ -144,6 +144,49 @@ def _compute_pr7_n_hat(sc_vec_km: np.ndarray, target_hat: np.ndarray) -> np.ndar
     return _unit(np.cos(limb_angle) * zenith + np.sin(limb_angle) * limb_dir)
 
 
+def _earthlimb_is_sunlit_pr7(sc_vec_km: np.ndarray, target_hat: np.ndarray, sun_hat: np.ndarray) -> bool:
+    """Day/night classification for the nearest Earth limb."""
+    n_hat = _compute_pr7_n_hat(sc_vec_km, target_hat)
+    return bool(float(np.dot(n_hat, sun_hat)) > 0.0)
+
+
+def _earth_center_sep_deg(sc_vec_km: np.ndarray, target_hat: np.ndarray) -> float:
+    nadir = -_unit(sc_vec_km)
+    return float(np.rad2deg(np.arccos(np.clip(np.dot(target_hat, nadir), -1.0, 1.0))))
+
+
+def _effective_earth_threshold_pr7(
+    sc_vec_km: np.ndarray,
+    target_hat: np.ndarray,
+    sun_hat: np.ndarray,
+    default_deg: float,
+    day_deg: float | None,
+    night_deg: float | None,
+) -> tuple[float, bool]:
+    sunlit = _earthlimb_is_sunlit_pr7(sc_vec_km, target_hat, sun_hat)
+    if day_deg is None and night_deg is None:
+        return float(default_deg), sunlit
+    day = float(default_deg if day_deg is None else day_deg)
+    night = float(default_deg if night_deg is None else night_deg)
+    return (day if sunlit else night), sunlit
+
+
+def _nearest_limb_tangent_direction(sc_vec_km: np.ndarray, target_hat: np.ndarray) -> np.ndarray:
+    """Return the spacecraft-to-limb tangent direction nearest the target LOS."""
+    zenith = _unit(sc_vec_km)
+    nadir = -zenith
+    proj = target_hat - zenith * float(np.dot(target_hat, zenith))
+    if float(np.linalg.norm(proj)) < 1e-12:
+        ref = np.array([1.0, 0.0, 0.0], dtype=float)
+        if abs(float(np.dot(ref, zenith))) > 0.9:
+            ref = np.array([0.0, 1.0, 0.0], dtype=float)
+        proj = ref - zenith * float(np.dot(ref, zenith))
+    limb_dir = _unit(proj)
+    r_sc = float(np.linalg.norm(sc_vec_km))
+    earth_angular_radius = float(np.arcsin(np.clip(R_EARTH_KM / r_sc, -1.0, 1.0)))
+    return _unit(np.cos(earth_angular_radius) * nadir + np.sin(earth_angular_radius) * limb_dir)
+
+
 def _panel_mask(
     i: int,
     j: int,
@@ -189,6 +232,9 @@ def _plot_simple_geometry(
     target_dec_deg: float,
     alt_km: float,
     mean_anomaly_offset_deg: float,
+    earth_avoidance_default_deg: float,
+    earth_avoidance_day_deg: float | None,
+    earth_avoidance_night_deg: float | None,
     show_earth_frame: bool = True,
     time_utc: str | Time | None = None,
 ):
@@ -202,6 +248,16 @@ def _plot_simple_geometry(
 
     n_hat = _compute_pr7_n_hat(sc_vec_km, target_hat)
     dot_ns = float(np.dot(n_hat, sun_hat))
+    earth_center_sep_deg = _earth_center_sep_deg(sc_vec_km, target_hat)
+    earth_threshold_deg, earthlimb_sunlit_pr7 = _effective_earth_threshold_pr7(
+        sc_vec_km,
+        target_hat,
+        sun_hat,
+        earth_avoidance_default_deg,
+        earth_avoidance_day_deg,
+        earth_avoidance_night_deg,
+    )
+    earth_ok = earth_center_sep_deg > earth_threshold_deg
 
     rng = np.random.default_rng(0)
     n_samp = rng.normal(size=(30000, 3))
@@ -215,7 +271,7 @@ def _plot_simple_geometry(
     frac_dayside_visible = float((visible & dayside).mean())
     frac_dayside_visible_toward = float((visible & dayside & toward_target).mean())
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(20, 8))
     planes = [(0, 1, "X", "Y", "XY"), (0, 2, "X", "Z", "XZ"), (1, 2, "Y", "Z", "YZ")]
     viewer_by_title = {
         "XY": np.array([0.0, 0.0, 1.0], dtype=float),
@@ -290,7 +346,7 @@ def _plot_simple_geometry(
 
         S = np.array([sc_u[i], sc_u[j]], dtype=float)
         ax.scatter([S[0]], [S[1]], color="black", s=40, marker="s", zorder=6)
-        ax.text(S[0] + 0.03, S[1] + 0.03, "Pandora", color="black", fontsize=9)
+        ax.text(S[0] + 0.03, S[1] + 0.03, "Pandora", color="black", fontsize=14)
 
         def draw_from_sc(vec3, color):
             d2 = np.array([vec3[i], vec3[j]], dtype=float)
@@ -301,6 +357,8 @@ def _plot_simple_geometry(
 
         draw_from_sc(sun_hat, "gold")
         draw_from_sc(target_hat, "red")
+
+
 
         ax.axhline(0.0, color="lightgray", linewidth=0.8)
         ax.axvline(0.0, color="lightgray", linewidth=0.8)
@@ -315,22 +373,30 @@ def _plot_simple_geometry(
         ax.set_title(title)
         ax.grid(alpha=0.25)
 
-    axes[0].plot([], [], color="#9fd8ff", linewidth=8, alpha=0.55, label="dayside seen from Pandora toward target")
+    axes[0].plot([], [], color="#9fd8ff", linewidth=8, alpha=0.55, label="dayside toward target")
     axes[0].plot([], [], color="#2e5fbf", linewidth=2.0, label="terminator")
     axes[0].plot([], [], color="#2e5fbf", linewidth=1.6, linestyle="--")
-    axes[0].plot([], [], color="black", linewidth=0.9, linestyle="-", label="orbit")
+    axes[0].plot([], [], color="black", linewidth=0.9, linestyle="-")#, label="orbit")
     axes[0].plot([], [], color="black", linewidth=0.9, linestyle="--")
     if show_earth_frame:
-        axes[0].plot([], [], color="#8a2be2", linewidth=0.8, linestyle="--", label="Earth equator & spin axis")
-    axes[0].legend(loc="lower left", fontsize=8)
+        axes[0].plot([], [], color="#8a2be2", linewidth=0.8, linestyle="--", label="Earth equator & axis")
+    axes[0].legend(loc="lower left", fontsize=14)
 
     fig.suptitle(
         f"UTC = {sun_time.isot[:19]}\n"
         f"Target(RA, Dec) = ({target_ra_deg:.0f} deg, {target_dec_deg:+.0f} deg)\n"
-        f"dayside visible (total) = {100.0 * frac_dayside_visible:.1f}% | dayside visible (toward-target) = {100.0 * frac_dayside_visible_toward:.1f}%"
+        f"dayside visible (total) = {100.0 * frac_dayside_visible:.1f}% | dayside visible (toward-target) = {100.0 * frac_dayside_visible_toward:.1f}%",
+        fontsize=16,
     )
     plt.tight_layout()
-    return fig
+    return fig, {
+        "dayside_visible_toward_target": frac_dayside_visible_toward,
+        "dot_ns": dot_ns,
+        "earthlimb_sunlit_pr7": earthlimb_sunlit_pr7,
+        "earth_center_sep_deg": earth_center_sep_deg,
+        "earth_threshold_deg": earth_threshold_deg,
+        "earth_ok": earth_ok,
+    }
 
 
 st.set_page_config(page_title="Pandora Visible Dayside", layout="wide")
@@ -408,13 +474,24 @@ with st.sidebar:
         key="target_dec_input",
         on_change=_sync_target_dec_from_input,
     )
-    mean_anomaly_offset_deg = st.slider("Mean anomaly offset [deg]", min_value=-180.0, max_value=180.0, value=150.0, step=5.0)
-    show_earth_frame = st.checkbox("Show Earth equator & spin axis", value=False)
+    mean_anomaly_offset_deg = st.slider("Mean anomaly Pandora [deg]", min_value=-180.0, max_value=180.0, value=150.0, step=5.0)
+    show_earth_frame = st.checkbox("Show Earth equator & axis", value=False)
     use_now = st.checkbox("Use time = now", key="use_now")
     if use_now:
         time_utc = None
     else:
         time_utc = st.text_input("UTC time", value=st.session_state.manual_utc_time, key="manual_utc_time")
+
+    st.markdown("---")
+    st.subheader("Earth Keepout")
+    earth_avoidance_default_deg = st.number_input("Earth keepout default [deg]", value=40.0, step=1.0, format="%.1f")
+    use_day_night_earth = st.checkbox("Use separate day/night Earth keepout", value=False)
+    if use_day_night_earth:
+        earth_avoidance_day_deg = st.number_input("Earth keepout day [deg]", value=40.0, step=1.0, format="%.1f")
+        earth_avoidance_night_deg = st.number_input("Earth keepout night [deg]", value=40.0, step=1.0, format="%.1f")
+    else:
+        earth_avoidance_day_deg = None
+        earth_avoidance_night_deg = None
 
     st.markdown("---")
     st.subheader("Orbital Elements")
@@ -436,14 +513,38 @@ custom_elements = {
 # Override the module default used by the plotting helpers.
 DEFAULT_ORBIT_ELEMENTS.update(custom_elements)
 
-fig = _plot_simple_geometry(
+fig, metrics = _plot_simple_geometry(
     target_ra_deg=float(target_ra_deg),
     target_dec_deg=float(target_dec_deg),
     alt_km=alt_km,
     mean_anomaly_offset_deg=mean_anomaly_offset_deg,
+    earth_avoidance_default_deg=float(earth_avoidance_default_deg),
+    earth_avoidance_day_deg=(None if earth_avoidance_day_deg is None else float(earth_avoidance_day_deg)),
+    earth_avoidance_night_deg=(None if earth_avoidance_night_deg is None else float(earth_avoidance_night_deg)),
     show_earth_frame=show_earth_frame,
     time_utc=time_utc,
 )
+
+if not metrics["earth_ok"]:
+    st.markdown(
+        f"""
+        <div style="background-color:#ffe5e5;border-left:6px solid #cc0000;padding:0.75rem 1rem;border-radius:0.4rem;color:#660000;font-weight:600;">
+            Earth keepout failed: Earth-center separation {metrics['earth_center_sep_deg']:.1f} deg is below the
+            active threshold {metrics['earth_threshold_deg']:.1f} deg.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown(
+        f"""
+        <div style="background-color:#e8f6ea;border-left:6px solid #2d7a46;padding:0.75rem 1rem;border-radius:0.4rem;color:#1f4f2d;font-weight:600;">
+            Earth keepout passed: Earth-center separation {metrics['earth_center_sep_deg']:.1f} deg exceeds the
+            active threshold {metrics['earth_threshold_deg']:.1f} deg.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 figure_slot = st.empty()
 download_slot = st.empty()
