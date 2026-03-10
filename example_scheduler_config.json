@@ -25,7 +25,7 @@
   "# Behavior flags": null,
   "force_regenerate": false,
   "use_legacy_mode": false,
-  "primary_only_mode": false,
+  "primary_only_mode": true,
 
   "# Occultation XML controls: generate_occultation_xml toggles occultation filling in XML; one_occultation_target toggles Pass 1 (single target must cover all intervals).": null,
   "generate_occultation_xml": true,
@@ -50,7 +50,7 @@
 
   "# Extra inputs used by pipeline (paths and small flags)": null,
   "extra_inputs": {
-    "target_definition_base": "/path/to/PandoraTargetList/target_definition_files",
+    "target_definition_base": ".../PandoraTargetList/target_definition_files",
     "target_definition_files": [
       "exoplanet",
       "auxiliary-standard",
@@ -58,7 +58,7 @@
       "occultation-standard"
     ],
     "generate_visibility": false,
-    "visibility_gmat": "/path/to/pandora-scheduler/gmat/PAN-GMAT-COM-YYYYMMDD-VF-YYYYMMDD-EX-YYYYMMDD-R001.txt",
+    "visibility_gmat": "gmat/PAN-GMAT-COM-20260303-VF-20260303-EX-20270403-R001.txt",
     "visibility_output_root": null,
     "skip_manifests": false
   }
