@@ -511,7 +511,7 @@ with st.sidebar:
     )
     mean_anomaly_offset_deg = st.slider("Mean anomaly Pandora [deg]", min_value=0.0, max_value=360.0, value=150.0, step=5.0)
     show_earth_frame = st.checkbox("Show Earth equator & axis", value=False)
-    show_xz_helpers = st.checkbox("Show XZ Earth-center/target helpers", value=False)
+    show_xz_helpers = st.checkbox("Show Earth-center/limb vectors", value=False)
     use_now = st.checkbox("Use time = now", key="use_now")
     if use_now:
         time_utc = None
