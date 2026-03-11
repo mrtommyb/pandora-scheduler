@@ -236,6 +236,7 @@ def _plot_simple_geometry(
     earth_avoidance_day_deg: float | None,
     earth_avoidance_night_deg: float | None,
     show_earth_frame: bool = True,
+    show_xz_helpers: bool = True,
     time_utc: str | Time | None = None,
 ):
     sun_hat, sun_time, sun_lon_deg, sun_lat_deg = _sun_hat_now_ecliptic(time_utc=time_utc)
@@ -358,7 +359,39 @@ def _plot_simple_geometry(
         draw_from_sc(sun_hat, "gold")
         draw_from_sc(target_hat, "red")
 
-
+        if title == "XZ":
+            limb_xy = np.array([n_hat[i], n_hat[j]], dtype=float)
+            if show_xz_helpers:
+                ax.scatter([limb_xy[0]], [limb_xy[1]], color="#006400", s=30, zorder=8)
+                ax.text(limb_xy[0] + 0.03, limb_xy[1] + 0.03, "L", color="#006400", fontsize=12, zorder=9)
+                ax.plot(
+                    [S[0], 0.0],
+                    [S[1], 0.0],
+                    color="#666666",
+                    linewidth=1.2,
+                    linestyle=":",
+                    alpha=0.9,
+                    zorder=6,
+                )
+                ax.plot(
+                    [S[0], limb_xy[0]],
+                    [S[1], limb_xy[1]],
+                    color="#006400",
+                    linewidth=1.2,
+                    linestyle=":",
+                    alpha=0.9,
+                    zorder=6,
+                )
+                ax.text(0.03, 0.03, "Earth center", color="#666666", fontsize=11, zorder=9)
+                target_tip = S + 0.50 * np.array([target_hat[i], target_hat[j]], dtype=float)
+                ax.text(
+                    target_tip[0] + 0.03,
+                    target_tip[1] + 0.03,
+                    "Target",
+                    color="red",
+                    fontsize=11,
+                    zorder=9,
+                )
 
         ax.axhline(0.0, color="lightgray", linewidth=0.8)
         ax.axvline(0.0, color="lightgray", linewidth=0.8)
@@ -380,6 +413,8 @@ def _plot_simple_geometry(
     axes[0].plot([], [], color="black", linewidth=0.9, linestyle="--")
     if show_earth_frame:
         axes[0].plot([], [], color="#8a2be2", linewidth=0.8, linestyle="--", label="Earth equator & axis")
+    if show_xz_helpers:
+        axes[0].plot([], [], marker="o", color="#006400", linestyle="None", label="nearest limb point L")
     axes[0].legend(loc="lower left", fontsize=14)
 
     fig.suptitle(
@@ -476,6 +511,7 @@ with st.sidebar:
     )
     mean_anomaly_offset_deg = st.slider("Mean anomaly Pandora [deg]", min_value=0.0, max_value=360.0, value=150.0, step=5.0)
     show_earth_frame = st.checkbox("Show Earth equator & axis", value=False)
+    show_xz_helpers = st.checkbox("Show XZ Earth-center/target helpers", value=False)
     use_now = st.checkbox("Use time = now", key="use_now")
     if use_now:
         time_utc = None
@@ -484,11 +520,11 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("Earth Keepout")
-    earth_avoidance_default_deg = st.number_input("Earth keepout default [deg]", value=40.0, step=1.0, format="%.1f")
+    earth_avoidance_default_deg = st.number_input("Earth keepout default [deg]", value=86.0, step=1.0, format="%.1f")
     use_day_night_earth = st.checkbox("Use separate day/night Earth keepout", value=False)
     if use_day_night_earth:
-        earth_avoidance_day_deg = st.number_input("Earth keepout day [deg]", value=40.0, step=1.0, format="%.1f")
-        earth_avoidance_night_deg = st.number_input("Earth keepout night [deg]", value=40.0, step=1.0, format="%.1f")
+        earth_avoidance_day_deg = st.number_input("Earth keepout day [deg]", value=110.0, step=1.0, format="%.1f")
+        earth_avoidance_night_deg = st.number_input("Earth keepout night [deg]", value=86.0, step=1.0, format="%.1f")
     else:
         earth_avoidance_day_deg = None
         earth_avoidance_night_deg = None
@@ -522,6 +558,7 @@ fig, metrics = _plot_simple_geometry(
     earth_avoidance_day_deg=(None if earth_avoidance_day_deg is None else float(earth_avoidance_day_deg)),
     earth_avoidance_night_deg=(None if earth_avoidance_night_deg is None else float(earth_avoidance_night_deg)),
     show_earth_frame=show_earth_frame,
+    show_xz_helpers=show_xz_helpers,
     time_utc=time_utc,
 )
 
