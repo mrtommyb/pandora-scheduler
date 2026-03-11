@@ -474,7 +474,7 @@ with st.sidebar:
         key="target_dec_input",
         on_change=_sync_target_dec_from_input,
     )
-    mean_anomaly_offset_deg = st.slider("Mean anomaly Pandora [deg]", min_value=-180.0, max_value=180.0, value=150.0, step=5.0)
+    mean_anomaly_offset_deg = st.slider("Mean anomaly Pandora [deg]", min_value=0.0, max_value=360.0, value=150.0, step=5.0)
     show_earth_frame = st.checkbox("Show Earth equator & axis", value=False)
     use_now = st.checkbox("Use time = now", key="use_now")
     if use_now:
