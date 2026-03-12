@@ -40,7 +40,7 @@ EARTH_SPIN_AXIS = _unit(EARTH_SPIN_AXIS)
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
-EXOPLANET_TARGETS_CSV = APP_ROOT / "output_directory" / "data_91_25_96" / "exoplanet_targets.csv"
+EXOPLANET_TARGETS_CSV = APP_ROOT / "scripts" / "exoplanet_target_lookup.csv"
 
 
 def _load_exoplanet_target_rows() -> list[dict[str, str]]:
