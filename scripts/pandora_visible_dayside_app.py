@@ -551,7 +551,7 @@ def _plot_simple_geometry(
         f"dayside visible (total) = {100.0 * frac_dayside_visible:.1f}% | dayside visible (toward-target) = {100.0 * frac_dayside_visible_toward:.1f}%\n"
         # f"Sun separation = {sun_sep_deg:.1f} deg | Sun keepout = {float(sun_avoidance_deg):.1f} deg | sun_ok = {sun_ok}\n"
         # f"Moon separation = {moon_sep_deg:.1f} deg | Moon keepout = {float(moon_avoidance_deg):.1f} deg | moon_ok = {moon_ok}",
-        f"Sun separation = {sun_sep_deg:.1f} deg | Moon separation = {moon_sep_deg:.1f} deg",
+        f"Sun separation = {sun_sep_deg:.1f} deg | Moon separation = {moon_sep_deg:.1f} deg | Earth separation = {earth_center_sep_deg:.1f}",
         fontsize=16,
     )
     plt.tight_layout()
@@ -739,7 +739,7 @@ with st.sidebar:
     show_earth_frame = st.checkbox("Show Earth equator & axis", value=False)
     show_xz_helpers = st.checkbox("Show Earth-center/limb vectors", value=False)
     show_moon_arrow = st.checkbox("Show direction to Moon", value=False)
-    use_now = st.checkbox("Use time = now", key="use_now")
+    use_now = st.checkbox("Time = now", key="use_now")
     if use_now:
         time_utc = None
     else:
