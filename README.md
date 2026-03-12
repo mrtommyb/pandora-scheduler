@@ -30,3 +30,19 @@ poetry run python run_scheduler.py \
 ```
 
 If you need help, read `QUICK_START.md` for examples and troubleshooting tips.
+
+## Visible Dayside App
+
+The repo includes a Streamlit visualization app for inspecting Sun/Moon/Earth
+keepout geometry:
+
+```bash
+pip install -r vis_app/pandora_visible_dayside_requirements.txt
+streamlit run vis_app/pandora_visible_dayside_app.py
+```
+
+Deployment notes:
+
+- App entrypoint: `vis_app/pandora_visible_dayside_app.py`
+- Requirements: `vis_app/pandora_visible_dayside_requirements.txt`
+- Deployment guide: `vis_app/DEPLOY_pandora_visible_dayside.md`

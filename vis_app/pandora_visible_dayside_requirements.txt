@@ -1,0 +1,5 @@
+streamlit>=1.44
+numpy>=2.1
+matplotlib>=3.9
+astropy>=6.0
+astroquery>=0.4.9
