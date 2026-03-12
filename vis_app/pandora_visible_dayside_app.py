@@ -572,9 +572,7 @@ def _plot_simple_geometry(
         "earth_ok": earth_ok,
     }
 
-
-st.set_page_config(page_title="Pandora Target Visibility", layout="wide")
-st.title("Pandora Target Visibility")
+st.set_page_config(page_title="Pandora Visibility", layout="wide")
 
 if "use_now" not in st.session_state:
     st.session_state.use_now = True
@@ -598,6 +596,19 @@ if "simbad_target_query" not in st.session_state:
     st.session_state.simbad_target_query = "HD 209458"
 if "target_name_status" not in st.session_state:
     st.session_state.target_name_status = ""
+
+
+def _current_target_label() -> str:
+    selected = str(st.session_state.get("selected_exoplanet_target", "")).strip()
+    if selected:
+        return selected
+    simbad_name = str(st.session_state.get("simbad_target_query", "")).strip()
+    if simbad_name:
+        return simbad_name
+    return "Target"
+
+
+st.title(f"Pandora Visibility for {_current_target_label()}")
 
 def _sync_target_ra_from_slider() -> None:
     value = float(st.session_state.target_ra_slider)
