@@ -596,15 +596,14 @@ if "simbad_target_query" not in st.session_state:
     st.session_state.simbad_target_query = "HD 209458"
 if "target_name_status" not in st.session_state:
     st.session_state.target_name_status = ""
+if "current_target_name" not in st.session_state:
+    st.session_state.current_target_name = _DEFAULT_TARGET_NAME
 
 
 def _current_target_label() -> str:
-    selected = str(st.session_state.get("selected_exoplanet_target", "")).strip()
-    if selected:
-        return selected
-    simbad_name = str(st.session_state.get("simbad_target_query", "")).strip()
-    if simbad_name:
-        return simbad_name
+    current = str(st.session_state.get("current_target_name", "")).strip()
+    if current:
+        return current
     return "Target"
 
 
@@ -634,6 +633,7 @@ def _sync_target_dec_from_input() -> None:
 def _apply_target_row(match: dict[str, str], source_label: str) -> None:
     ra = float(match["ra"])
     dec = float(match["dec"])
+    st.session_state.current_target_name = str(match["name"]).strip()
     st.session_state.target_ra_deg = ra
     st.session_state.target_ra_slider = ra
     st.session_state.target_ra_input = ra
