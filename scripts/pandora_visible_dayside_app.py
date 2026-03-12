@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import csv
 from datetime import datetime, timezone
 from io import BytesIO
+from pathlib import Path
 
 import astropy.units as u
 import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
-from astropy.coordinates import GeocentricMeanEcliptic, get_body, get_sun
+from astropy.coordinates import GeocentricMeanEcliptic, SkyCoord, get_body, get_sun
 from astropy.time import Time
 
 R_EARTH_KM = 6378.137
@@ -35,6 +37,87 @@ def _unit(v: np.ndarray) -> np.ndarray:
 
 ECLIPTIC_NORTH = _unit(ECLIPTIC_NORTH)
 EARTH_SPIN_AXIS = _unit(EARTH_SPIN_AXIS)
+
+
+APP_ROOT = Path(__file__).resolve().parents[1]
+EXOPLANET_TARGETS_CSV = APP_ROOT / "output_directory" / "data_91_25_96" / "exoplanet_targets.csv"
+
+
+def _load_exoplanet_target_rows() -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    seen_names: set[str] = set()
+    if not EXOPLANET_TARGETS_CSV.exists():
+        return rows
+    with EXOPLANET_TARGETS_CSV.open(newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            name = str(row.get("Star Name", "")).strip()
+            ra = str(row.get("RA", "")).strip()
+            dec = str(row.get("DEC", "")).strip()
+            if not name or not ra or not dec:
+                continue
+            key = name.casefold()
+            if key in seen_names:
+                continue
+            seen_names.add(key)
+            rows.append({"name": name, "ra": ra, "dec": dec})
+    rows.sort(key=lambda item: item["name"].casefold())
+    return rows
+
+
+def _resolve_selected_exoplanet(name: str) -> dict[str, str] | None:
+    query = str(name).strip().casefold()
+    if not query:
+        return None
+    for row in _load_exoplanet_target_rows():
+        if row["name"].casefold() == query:
+            return row
+    return None
+
+
+_DEFAULT_TARGET_NAME = "GJ_3470"
+_DEFAULT_TARGET_ROW = _resolve_selected_exoplanet(_DEFAULT_TARGET_NAME)
+_DEFAULT_TARGET_RA = (
+    float(_DEFAULT_TARGET_ROW["ra"]) if _DEFAULT_TARGET_ROW is not None else 145.0
+)
+_DEFAULT_TARGET_DEC = (
+    float(_DEFAULT_TARGET_ROW["dec"]) if _DEFAULT_TARGET_ROW is not None else 10.0
+)
+
+
+def _resolve_target_via_simbad(name: str) -> dict[str, str] | None:
+    query = str(name).strip()
+    if not query:
+        return None
+    try:
+        from astroquery.simbad import Simbad
+    except Exception as exc:
+        raise RuntimeError("astroquery.simbad is not available in this environment") from exc
+
+    simbad = Simbad()
+    simbad.add_votable_fields("ra(d)", "dec(d)")
+    result = simbad.query_object(query)
+    if result is None or len(result) == 0:
+        return None
+    colmap = {str(col).lower(): col for col in result.colnames}
+    if "ra_d" in colmap and "dec_d" in colmap:
+        ra_deg = float(result[colmap["ra_d"]][0])
+        dec_deg = float(result[colmap["dec_d"]][0])
+    elif "ra" in colmap and "dec" in colmap:
+        ra_raw = str(result[colmap["ra"]][0]).strip()
+        dec_raw = str(result[colmap["dec"]][0]).strip()
+        coord = SkyCoord(ra=ra_raw, dec=dec_raw, unit=(u.hourangle, u.deg), frame="icrs")
+        ra_deg = float(coord.ra.deg)
+        dec_deg = float(coord.dec.deg)
+    else:
+        raise RuntimeError(
+            f"Simbad result missing RA/DEC columns; available columns: {list(result.colnames)}"
+        )
+    return {
+        "name": query,
+        "ra": f"{ra_deg:.10f}",
+        "dec": f"{dec_deg:.10f}",
+    }
 
 
 def _sun_hat_now_ecliptic(time_utc: str | Time | None = None) -> tuple[np.ndarray, Time, float, float]:
@@ -490,17 +573,17 @@ def _plot_simple_geometry(
     }
 
 
-st.set_page_config(page_title="Pandora Visible Dayside", layout="wide")
-st.title("Pandora Visible Dayside")
+st.set_page_config(page_title="Pandora Target Visibility", layout="wide")
+st.title("Pandora Target Visibility")
 
 if "use_now" not in st.session_state:
     st.session_state.use_now = True
 if "manual_utc_time" not in st.session_state:
     st.session_state.manual_utc_time = Time.now().utc.isot[:19]
 if "target_ra_deg" not in st.session_state:
-    st.session_state.target_ra_deg = 145.0
+    st.session_state.target_ra_deg = _DEFAULT_TARGET_RA
 if "target_dec_deg" not in st.session_state:
-    st.session_state.target_dec_deg = 10.0
+    st.session_state.target_dec_deg = _DEFAULT_TARGET_DEC
 if "target_ra_slider" not in st.session_state:
     st.session_state.target_ra_slider = float(st.session_state.target_ra_deg)
 if "target_ra_input" not in st.session_state:
@@ -509,6 +592,12 @@ if "target_dec_slider" not in st.session_state:
     st.session_state.target_dec_slider = float(st.session_state.target_dec_deg)
 if "target_dec_input" not in st.session_state:
     st.session_state.target_dec_input = float(st.session_state.target_dec_deg)
+if "selected_exoplanet_target" not in st.session_state:
+    st.session_state.selected_exoplanet_target = _DEFAULT_TARGET_NAME
+if "simbad_target_query" not in st.session_state:
+    st.session_state.simbad_target_query = "HD 209458"
+if "target_name_status" not in st.session_state:
+    st.session_state.target_name_status = ""
 
 def _sync_target_ra_from_slider() -> None:
     value = float(st.session_state.target_ra_slider)
@@ -530,41 +619,122 @@ def _sync_target_dec_from_input() -> None:
     st.session_state.target_dec_deg = value
     st.session_state.target_dec_slider = value
 
+
+def _apply_target_row(match: dict[str, str], source_label: str) -> None:
+    ra = float(match["ra"])
+    dec = float(match["dec"])
+    st.session_state.target_ra_deg = ra
+    st.session_state.target_ra_slider = ra
+    st.session_state.target_ra_input = ra
+    st.session_state.target_dec_deg = dec
+    st.session_state.target_dec_slider = dec
+    st.session_state.target_dec_input = dec
+    st.session_state.target_name_status = (
+        f"Loaded {match['name']} from {source_label}."
+    )
+
+
+def _apply_exoplanet_target_lookup() -> None:
+    match = _resolve_selected_exoplanet(st.session_state.selected_exoplanet_target)
+    if match is None:
+        st.session_state.target_name_status = (
+            f"No exoplanet target match found for '{st.session_state.selected_exoplanet_target}'."
+        )
+        return
+    _apply_target_row(match, EXOPLANET_TARGETS_CSV.name)
+
+
+def _apply_simbad_target_lookup() -> None:
+    try:
+        match = _resolve_target_via_simbad(st.session_state.simbad_target_query)
+    except Exception as exc:
+        st.session_state.target_name_status = f"Simbad lookup failed: {exc}"
+        return
+    if match is None:
+        st.session_state.target_name_status = (
+            f"No Simbad match found for '{st.session_state.simbad_target_query}'."
+        )
+        return
+    _apply_target_row(match, "Simbad")
+
 with st.sidebar:
-    st.slider(
-        "Target RA [deg]",
-        min_value=0.0,
-        max_value=360.0,
-        step=1.0,
-        key="target_ra_slider",
-        on_change=_sync_target_ra_from_slider,
-    )
-    target_ra_deg = st.number_input(
-        "Target RA input [deg]",
-        min_value=0.0,
-        max_value=360.0,
-        step=1.0,
-        format="%.3f",
-        key="target_ra_input",
-        on_change=_sync_target_ra_from_input,
-    )
-    st.slider(
-        "Target Dec [deg]",
-        min_value=-90.0,
-        max_value=90.0,
-        step=1.0,
-        key="target_dec_slider",
-        on_change=_sync_target_dec_from_slider,
-    )
-    target_dec_deg = st.number_input(
-        "Target Dec input [deg]",
-        min_value=-90.0,
-        max_value=90.0,
-        step=1.0,
-        format="%.3f",
-        key="target_dec_input",
-        on_change=_sync_target_dec_from_input,
-    )
+    with st.expander("Target", expanded=False):
+        exoplanet_names = [""] + [row["name"] for row in _load_exoplanet_target_rows()]
+        with st.form("exoplanet_target_form", clear_on_submit=False):
+            st.selectbox(
+                "Exoplanet target",
+                options=exoplanet_names,
+                key="selected_exoplanet_target",
+            )
+            if len(exoplanet_names) <= 1:
+                st.caption(f"No exoplanet targets loaded from {EXOPLANET_TARGETS_CSV}")
+            load_exoplanet = st.form_submit_button("Load exoplanet RA/Dec")
+        if load_exoplanet:
+            _apply_exoplanet_target_lookup()
+        st.text_input(
+            "Simbad star name",
+            key="simbad_target_query",
+            placeholder="e.g. HD 209458",
+        )
+        st.button("Resolve with Simbad", on_click=_apply_simbad_target_lookup)
+        if st.session_state.target_name_status:
+            st.caption(st.session_state.target_name_status)
+
+        st.slider(
+            "Target RA [deg]",
+            min_value=0.0,
+            max_value=360.0,
+            step=1.0,
+            key="target_ra_slider",
+            on_change=_sync_target_ra_from_slider,
+        )
+        target_ra_deg = st.number_input(
+            "Target RA input [deg]",
+            min_value=0.0,
+            max_value=360.0,
+            step=1.0,
+            format="%.3f",
+            key="target_ra_input",
+            on_change=_sync_target_ra_from_input,
+        )
+        st.slider(
+            "Target Dec [deg]",
+            min_value=-90.0,
+            max_value=90.0,
+            step=1.0,
+            key="target_dec_slider",
+            on_change=_sync_target_dec_from_slider,
+        )
+        target_dec_deg = st.number_input(
+            "Target Dec input [deg]",
+            min_value=-90.0,
+            max_value=90.0,
+            step=1.0,
+            format="%.3f",
+            key="target_dec_input",
+            on_change=_sync_target_dec_from_input,
+        )
+
+    with st.expander("Keepout angles", expanded=False):
+        sun_avoidance_deg = st.number_input("Sun avoidance [deg]", value=91.0, step=1.0, format="%.1f")
+        moon_avoidance_deg = st.number_input("Moon avoidance [deg]", value=20.0, step=1.0, format="%.1f")
+        earth_avoidance_default_deg = st.number_input("Earth keepout default [deg]", value=86.0, step=1.0, format="%.1f")
+        use_day_night_earth = st.checkbox("Use separate day/night Earth keepout", value=False)
+        if use_day_night_earth:
+            earth_avoidance_day_deg = st.number_input("Earth keepout day [deg]", value=110.0, step=1.0, format="%.1f")
+            earth_avoidance_night_deg = st.number_input("Earth keepout night [deg]", value=86.0, step=1.0, format="%.1f")
+        else:
+            earth_avoidance_day_deg = None
+            earth_avoidance_night_deg = None
+
+    with st.expander("Orbital Elements", expanded=False):
+        alt_km = st.number_input("Altitude [km]", min_value=400.0, max_value=2000.0, value=600.0, step=10.0, format="%.1f")
+        inclination_deg = st.number_input("Inclination [deg]", value=float(DEFAULT_ORBIT_ELEMENTS['inclination_deg']), format="%.4f")
+        raan_deg = st.number_input("RAAN [deg]", value=float(DEFAULT_ORBIT_ELEMENTS['raan_deg']), format="%.4f")
+        eccentricity = st.number_input("Eccentricity", min_value=0.0, max_value=0.99, value=float(DEFAULT_ORBIT_ELEMENTS['eccentricity']), format="%.7f")
+        arg_perigee_deg = st.number_input("Argument of perigee [deg]", value=float(DEFAULT_ORBIT_ELEMENTS['arg_perigee_deg']), format="%.4f")
+        mean_anomaly_deg = st.number_input("Reference mean anomaly [deg]", value=float(DEFAULT_ORBIT_ELEMENTS['mean_anomaly_deg']), format="%.4f")
+
     mean_anomaly_offset_deg = st.slider("Mean anomaly Pandora [deg]", min_value=0.0, max_value=360.0, value=150.0, step=5.0)
     show_earth_frame = st.checkbox("Show Earth equator & axis", value=False)
     show_xz_helpers = st.checkbox("Show Earth-center/limb vectors", value=False)
@@ -574,34 +744,6 @@ with st.sidebar:
         time_utc = None
     else:
         time_utc = st.text_input("UTC time", value=st.session_state.manual_utc_time, key="manual_utc_time")
-
-    st.markdown("---")
-    st.subheader("Sun Keepout")
-    sun_avoidance_deg = st.number_input("Sun avoidance [deg]", value=91.0, step=1.0, format="%.1f")
-
-    st.markdown("---")
-    st.subheader("Moon Keepout")
-    moon_avoidance_deg = st.number_input("Moon avoidance [deg]", value=20.0, step=1.0, format="%.1f")
-
-    st.markdown("---")
-    st.subheader("Earth Keepout")
-    earth_avoidance_default_deg = st.number_input("Earth keepout default [deg]", value=86.0, step=1.0, format="%.1f")
-    use_day_night_earth = st.checkbox("Use separate day/night Earth keepout", value=False)
-    if use_day_night_earth:
-        earth_avoidance_day_deg = st.number_input("Earth keepout day [deg]", value=110.0, step=1.0, format="%.1f")
-        earth_avoidance_night_deg = st.number_input("Earth keepout night [deg]", value=86.0, step=1.0, format="%.1f")
-    else:
-        earth_avoidance_day_deg = None
-        earth_avoidance_night_deg = None
-
-    st.markdown("---")
-    st.subheader("Orbital Elements")
-    alt_km = st.number_input("Altitude [km]", min_value=400.0, max_value=2000.0, value=600.0, step=10.0, format="%.1f")
-    inclination_deg = st.number_input("Inclination [deg]", value=float(DEFAULT_ORBIT_ELEMENTS['inclination_deg']), format="%.4f")
-    raan_deg = st.number_input("RAAN [deg]", value=float(DEFAULT_ORBIT_ELEMENTS['raan_deg']), format="%.4f")
-    eccentricity = st.number_input("Eccentricity", min_value=0.0, max_value=0.99, value=float(DEFAULT_ORBIT_ELEMENTS['eccentricity']), format="%.7f")
-    arg_perigee_deg = st.number_input("Argument of perigee [deg]", value=float(DEFAULT_ORBIT_ELEMENTS['arg_perigee_deg']), format="%.4f")
-    mean_anomaly_deg = st.number_input("Reference mean anomaly [deg]", value=float(DEFAULT_ORBIT_ELEMENTS['mean_anomaly_deg']), format="%.4f")
 
 custom_elements = {
     'inclination_deg': inclination_deg,
