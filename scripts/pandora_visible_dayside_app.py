@@ -7,7 +7,7 @@ import astropy.units as u
 import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
-from astropy.coordinates import GeocentricMeanEcliptic, get_sun
+from astropy.coordinates import GeocentricMeanEcliptic, get_body, get_sun
 from astropy.time import Time
 
 R_EARTH_KM = 6378.137
@@ -58,6 +58,29 @@ def _sun_hat_now_ecliptic(time_utc: str | Time | None = None) -> tuple[np.ndarra
         )
     )
     return sun_hat, t, float(np.rad2deg(lon)) % 360.0, float(np.rad2deg(lat))
+
+
+def _moon_hat_now_ecliptic(time_utc: str | Time | None = None) -> tuple[np.ndarray, Time, float, float]:
+    if time_utc is None:
+        t = Time.now()
+    elif isinstance(time_utc, Time):
+        t = time_utc
+    else:
+        t = Time(str(time_utc), scale="utc")
+    moon_ecl = get_body("moon", t).transform_to(GeocentricMeanEcliptic(equinox=t))
+    lon = float(moon_ecl.lon.to_value(u.rad))
+    lat = float(moon_ecl.lat.to_value(u.rad))
+    moon_hat = _unit(
+        np.array(
+            [
+                np.cos(lat) * np.cos(lon),
+                np.cos(lat) * np.sin(lon),
+                np.sin(lat),
+            ],
+            dtype=float,
+        )
+    )
+    return moon_hat, t, float(np.rad2deg(lon)) % 360.0, float(np.rad2deg(lat))
 
 
 def _great_circle_points_from_normal(normal_hat: np.ndarray, npts: int = 721) -> np.ndarray:
@@ -155,6 +178,14 @@ def _earth_center_sep_deg(sc_vec_km: np.ndarray, target_hat: np.ndarray) -> floa
     return float(np.rad2deg(np.arccos(np.clip(np.dot(target_hat, nadir), -1.0, 1.0))))
 
 
+def _sun_sep_deg(target_hat: np.ndarray, sun_hat: np.ndarray) -> float:
+    return float(np.rad2deg(np.arccos(np.clip(np.dot(target_hat, sun_hat), -1.0, 1.0))))
+
+
+def _moon_sep_deg(target_hat: np.ndarray, moon_hat: np.ndarray) -> float:
+    return float(np.rad2deg(np.arccos(np.clip(np.dot(target_hat, moon_hat), -1.0, 1.0))))
+
+
 def _effective_earth_threshold_pr7(
     sc_vec_km: np.ndarray,
     target_hat: np.ndarray,
@@ -232,14 +263,18 @@ def _plot_simple_geometry(
     target_dec_deg: float,
     alt_km: float,
     mean_anomaly_offset_deg: float,
+    sun_avoidance_deg: float,
+    moon_avoidance_deg: float,
     earth_avoidance_default_deg: float,
     earth_avoidance_day_deg: float | None,
     earth_avoidance_night_deg: float | None,
     show_earth_frame: bool = True,
     show_xz_helpers: bool = True,
+    show_moon_arrow: bool = False,
     time_utc: str | Time | None = None,
 ):
     sun_hat, sun_time, sun_lon_deg, sun_lat_deg = _sun_hat_now_ecliptic(time_utc=time_utc)
+    moon_hat, _, moon_lon_deg, moon_lat_deg = _moon_hat_now_ecliptic(time_utc=sun_time)
     target_hat = _target_from_radec(target_ra_deg, target_dec_deg)
 
     sc_vec_km = _sc_state_from_elements(alt_km=alt_km, mean_anomaly_offset_deg=mean_anomaly_offset_deg)
@@ -249,6 +284,10 @@ def _plot_simple_geometry(
 
     n_hat = _compute_pr7_n_hat(sc_vec_km, target_hat)
     dot_ns = float(np.dot(n_hat, sun_hat))
+    sun_sep_deg = _sun_sep_deg(target_hat, sun_hat)
+    sun_ok = sun_sep_deg > float(sun_avoidance_deg)
+    moon_sep_deg = _moon_sep_deg(target_hat, moon_hat)
+    moon_ok = moon_sep_deg > float(moon_avoidance_deg)
     earth_center_sep_deg = _earth_center_sep_deg(sc_vec_km, target_hat)
     earth_threshold_deg, earthlimb_sunlit_pr7 = _effective_earth_threshold_pr7(
         sc_vec_km,
@@ -358,6 +397,8 @@ def _plot_simple_geometry(
 
         draw_from_sc(sun_hat, "gold")
         draw_from_sc(target_hat, "red")
+        if show_moon_arrow:
+            draw_from_sc(moon_hat, "#7f8c8d")
 
         if title == "XZ":
             limb_xy = np.array([n_hat[i], n_hat[j]], dtype=float)
@@ -409,24 +450,39 @@ def _plot_simple_geometry(
     axes[0].plot([], [], color="#9fd8ff", linewidth=8, alpha=0.55, label="dayside toward target")
     axes[0].plot([], [], color="#2e5fbf", linewidth=2.0, label="terminator")
     axes[0].plot([], [], color="#2e5fbf", linewidth=1.6, linestyle="--")
+    axes[0].plot([], [], color="gold", linewidth=2.0, label="to Sun")
+    axes[0].plot([], [], color="red", linewidth=2.0, label="to target")
     axes[0].plot([], [], color="black", linewidth=0.9, linestyle="-")#, label="orbit")
     axes[0].plot([], [], color="black", linewidth=0.9, linestyle="--")
     if show_earth_frame:
         axes[0].plot([], [], color="#8a2be2", linewidth=0.8, linestyle="--", label="Earth equator & axis")
     if show_xz_helpers:
         axes[0].plot([], [], marker="o", color="#006400", linestyle="None", label="nearest limb point L")
+    if show_moon_arrow:
+        axes[0].plot([], [], color="#7f8c8d", linewidth=2.0, label="to Moon")
     axes[0].legend(loc="lower left", fontsize=14)
 
     fig.suptitle(
         f"UTC = {sun_time.isot[:19]}\n"
         f"Target(RA, Dec) = ({target_ra_deg:.0f} deg, {target_dec_deg:+.0f} deg)\n"
-        f"dayside visible (total) = {100.0 * frac_dayside_visible:.1f}% | dayside visible (toward-target) = {100.0 * frac_dayside_visible_toward:.1f}%",
+        f"dayside visible (total) = {100.0 * frac_dayside_visible:.1f}% | dayside visible (toward-target) = {100.0 * frac_dayside_visible_toward:.1f}%\n"
+        # f"Sun separation = {sun_sep_deg:.1f} deg | Sun keepout = {float(sun_avoidance_deg):.1f} deg | sun_ok = {sun_ok}\n"
+        # f"Moon separation = {moon_sep_deg:.1f} deg | Moon keepout = {float(moon_avoidance_deg):.1f} deg | moon_ok = {moon_ok}",
+        f"Sun separation = {sun_sep_deg:.1f} deg | Moon separation = {moon_sep_deg:.1f} deg",
         fontsize=16,
     )
     plt.tight_layout()
     return fig, {
         "dayside_visible_toward_target": frac_dayside_visible_toward,
         "dot_ns": dot_ns,
+        "sun_sep_deg": sun_sep_deg,
+        "sun_avoidance_deg": float(sun_avoidance_deg),
+        "sun_ok": sun_ok,
+        "moon_sep_deg": moon_sep_deg,
+        "moon_avoidance_deg": float(moon_avoidance_deg),
+        "moon_ok": moon_ok,
+        "moon_lon_deg": moon_lon_deg,
+        "moon_lat_deg": moon_lat_deg,
         "earthlimb_sunlit_pr7": earthlimb_sunlit_pr7,
         "earth_center_sep_deg": earth_center_sep_deg,
         "earth_threshold_deg": earth_threshold_deg,
@@ -512,11 +568,20 @@ with st.sidebar:
     mean_anomaly_offset_deg = st.slider("Mean anomaly Pandora [deg]", min_value=0.0, max_value=360.0, value=150.0, step=5.0)
     show_earth_frame = st.checkbox("Show Earth equator & axis", value=False)
     show_xz_helpers = st.checkbox("Show Earth-center/limb vectors", value=False)
+    show_moon_arrow = st.checkbox("Show direction to Moon", value=False)
     use_now = st.checkbox("Use time = now", key="use_now")
     if use_now:
         time_utc = None
     else:
         time_utc = st.text_input("UTC time", value=st.session_state.manual_utc_time, key="manual_utc_time")
+
+    st.markdown("---")
+    st.subheader("Sun Keepout")
+    sun_avoidance_deg = st.number_input("Sun avoidance [deg]", value=91.0, step=1.0, format="%.1f")
+
+    st.markdown("---")
+    st.subheader("Moon Keepout")
+    moon_avoidance_deg = st.number_input("Moon avoidance [deg]", value=20.0, step=1.0, format="%.1f")
 
     st.markdown("---")
     st.subheader("Earth Keepout")
@@ -554,34 +619,58 @@ fig, metrics = _plot_simple_geometry(
     target_dec_deg=float(target_dec_deg),
     alt_km=alt_km,
     mean_anomaly_offset_deg=mean_anomaly_offset_deg,
+    sun_avoidance_deg=float(sun_avoidance_deg),
+    moon_avoidance_deg=float(moon_avoidance_deg),
     earth_avoidance_default_deg=float(earth_avoidance_default_deg),
     earth_avoidance_day_deg=(None if earth_avoidance_day_deg is None else float(earth_avoidance_day_deg)),
     earth_avoidance_night_deg=(None if earth_avoidance_night_deg is None else float(earth_avoidance_night_deg)),
     show_earth_frame=show_earth_frame,
     show_xz_helpers=show_xz_helpers,
+    show_moon_arrow=show_moon_arrow,
     time_utc=time_utc,
 )
 
-if not metrics["earth_ok"]:
-    st.markdown(
-        f"""
-        <div style="background-color:#ffe5e5;border-left:6px solid #cc0000;padding:0.75rem 1rem;border-radius:0.4rem;color:#660000;font-weight:600;">
-            Earth keepout failed: Earth-center separation {metrics['earth_center_sep_deg']:.1f} deg is below the
-            active threshold {metrics['earth_threshold_deg']:.1f} deg.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-else:
-    st.markdown(
-        f"""
-        <div style="background-color:#e8f6ea;border-left:6px solid #2d7a46;padding:0.75rem 1rem;border-radius:0.4rem;color:#1f4f2d;font-weight:600;">
-            Earth keepout passed: Earth-center separation {metrics['earth_center_sep_deg']:.1f} deg exceeds the
-            active threshold {metrics['earth_threshold_deg']:.1f} deg.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+status_values = [
+    (f"Sun Keepout ({float(sun_avoidance_deg):.0f} deg) Passed", metrics["sun_ok"]),
+    (f"Moon Keepout ({float(moon_avoidance_deg):.0f} deg) Passed", metrics["moon_ok"]),
+    ("Earth day/night Keepout Passed", metrics["earth_ok"]),
+]
+header_html = "".join(
+    f"""
+    <th style="
+        border:1px solid #d0d7de;
+        background-color:#f6f8fa;
+        color:#111827;
+        padding:0.3rem 0.5rem;
+        font-weight:600;
+        text-align:center;
+        white-space:nowrap;
+    ">{label}</th>
+    """
+    for label, _ in status_values
+)
+value_html = "".join(
+    f"""
+    <td style="
+        border:1px solid #d0d7de;
+        background-color:{'#e8f6ea' if value else '#ffe5e5'};
+        color:{'#1f4f2d' if value else '#660000'};
+        padding:0.4rem 0.5rem;
+        font-weight:700;
+        text-align:center;
+    ">{value}</td>
+    """
+    for _, value in status_values
+)
+st.markdown(
+    f"""
+    <table style="width:50%; border-collapse:collapse; margin:0.5rem 0 0.75rem 0;">
+        <tr>{header_html}</tr>
+        <tr>{value_html}</tr>
+    </table>
+    """,
+    unsafe_allow_html=True,
+)
 
 figure_slot = st.empty()
 download_slot = st.empty()
