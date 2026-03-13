@@ -12,7 +12,7 @@ import streamlit as st
 from astropy.coordinates import GeocentricMeanEcliptic, SkyCoord, get_body, get_sun
 from astropy.time import Time
 
-R_EARTH_KM = 6378.137
+R_EARTH_KM = 6371.0
 DEFAULT_ORBIT_ELEMENTS = {
     "inclination_deg": 97.8038,
     "raan_deg": 62.0432,
