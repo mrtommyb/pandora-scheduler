@@ -256,6 +256,11 @@ def _earthlimb_is_sunlit_pr7(sc_vec_km: np.ndarray, target_hat: np.ndarray, sun_
     return bool(float(np.dot(n_hat, sun_hat)) > 0.0)
 
 
+def _subspacecraft_point_is_sunlit(sc_vec_km: np.ndarray, sun_hat: np.ndarray) -> bool:
+    """Classify day/night from the sub-spacecraft point instead of nearest limb."""
+    return bool(float(np.dot(_unit(sc_vec_km), sun_hat)) > 0.0)
+
+
 def _earth_center_sep_deg(sc_vec_km: np.ndarray, target_hat: np.ndarray) -> float:
     nadir = -_unit(sc_vec_km)
     return float(np.rad2deg(np.arccos(np.clip(np.dot(target_hat, nadir), -1.0, 1.0))))
@@ -276,8 +281,12 @@ def _effective_earth_threshold_pr7(
     default_deg: float,
     day_deg: float | None,
     night_deg: float | None,
+    use_subspacecraft_daylight: bool = False,
 ) -> tuple[float, bool]:
-    sunlit = _earthlimb_is_sunlit_pr7(sc_vec_km, target_hat, sun_hat)
+    if use_subspacecraft_daylight:
+        sunlit = _subspacecraft_point_is_sunlit(sc_vec_km, sun_hat)
+    else:
+        sunlit = _earthlimb_is_sunlit_pr7(sc_vec_km, target_hat, sun_hat)
     if day_deg is None and night_deg is None:
         return float(default_deg), sunlit
     day = float(default_deg if day_deg is None else day_deg)
@@ -382,6 +391,7 @@ def _plot_simple_geometry(
     earth_avoidance_default_deg: float,
     earth_avoidance_day_deg: float | None,
     earth_avoidance_night_deg: float | None,
+    use_subspacecraft_daylight: bool = False,
     show_earth_frame: bool = True,
     show_xz_helpers: bool = True,
     show_moon_arrow: bool = False,
@@ -411,6 +421,7 @@ def _plot_simple_geometry(
         earth_avoidance_default_deg,
         earth_avoidance_day_deg,
         earth_avoidance_night_deg,
+        use_subspacecraft_daylight=use_subspacecraft_daylight,
     )
     earth_ok = earth_center_sep_deg > earth_threshold_deg
 
@@ -574,7 +585,7 @@ def _plot_simple_geometry(
         ax.set_title(title)
         ax.grid(alpha=0.25)
 
-    axes[0].plot([], [], color="#9fd8ff", linewidth=8, alpha=0.55, label="dayside toward target")
+    axes[0].plot([], [], color="#9fd8ff", linewidth=8, alpha=0.55, label="Dayside Earth toward target")
     axes[0].plot([], [], color="#2e5fbf", linewidth=2.0, label="terminator")
     axes[0].plot([], [], color="#2e5fbf", linewidth=1.6, linestyle="--")
     axes[0].plot([], [], color="gold", linewidth=2.0, label="to Sun")
@@ -588,7 +599,7 @@ def _plot_simple_geometry(
     if show_moon_arrow:
         axes[0].plot([], [], color="#7f8c8d", linewidth=2.0, label="to Moon")
     if show_dayside_visible_outline:
-        axes[0].plot([], [], color="#1f77b4", linewidth=1.5, linestyle=":", label="dayside visible")
+        axes[0].plot([], [], color="#1f77b4", linewidth=1.5, linestyle=":", label="Total Earth visible")
     axes[0].legend(loc="lower left", fontsize=14)
 
     fig.suptitle(
@@ -613,6 +624,9 @@ def _plot_simple_geometry(
         "moon_lon_deg": moon_lon_deg,
         "moon_lat_deg": moon_lat_deg,
         "earthlimb_sunlit_pr7": earthlimb_sunlit_pr7,
+        "earth_classifier": (
+            "Pandora-over-dayside" if use_subspacecraft_daylight else "Limb-towards-target-dayside"
+        ),
         "earth_center_sep_deg": earth_center_sep_deg,
         "earth_threshold_deg": earth_threshold_deg,
         "earth_ok": earth_ok,
@@ -793,10 +807,16 @@ with st.sidebar:
         mean_anomaly_deg = st.number_input("Reference mean anomaly [deg]", value=float(DEFAULT_ORBIT_ELEMENTS['mean_anomaly_deg']), format="%.4f")
 
     mean_anomaly_offset_deg = st.slider("Mean anomaly Pandora [deg]", min_value=0.0, max_value=360.0, value=150.0, step=5.0)
+    dayside_classifier = st.selectbox(
+        "Dayside classifier",
+        options=["Limb-towards-target-dayside", "Pandora-over-dayside"],
+        index=0,
+    )
+    use_subspacecraft_daylight = dayside_classifier == "Pandora-over-dayside"
     show_earth_frame = st.checkbox("Show Earth equator & axis", value=False)
     show_xz_helpers = st.checkbox("Show Earth-center/limb vectors", value=False)
     show_moon_arrow = st.checkbox("Show direction to Moon", value=False)
-    show_dayside_visible_outline = st.checkbox("Show total dayside visible", value=False)
+    show_dayside_visible_outline = st.checkbox("Show total Earth visible", value=False)
     use_now = st.checkbox("Time = now", key="use_now")
     if use_now:
         time_utc = None
@@ -824,6 +844,7 @@ fig, metrics = _plot_simple_geometry(
     earth_avoidance_default_deg=float(earth_avoidance_default_deg),
     earth_avoidance_day_deg=(None if earth_avoidance_day_deg is None else float(earth_avoidance_day_deg)),
     earth_avoidance_night_deg=(None if earth_avoidance_night_deg is None else float(earth_avoidance_night_deg)),
+    use_subspacecraft_daylight=use_subspacecraft_daylight,
     show_earth_frame=show_earth_frame,
     show_xz_helpers=show_xz_helpers,
     show_moon_arrow=show_moon_arrow,
@@ -836,6 +857,19 @@ status_values = [
     (f"Moon Keepout ({float(moon_avoidance_deg):.0f} deg) Passed", metrics["moon_ok"]),
     ("Earth day/night Keepout Passed", metrics["earth_ok"]),
 ]
+
+st.markdown(
+    (
+        f"<div style='margin:0.2rem 0 0.5rem 0; font-size:15px; font-style: italic; color:#6b7280;'>"
+        f"Dayside classifier: <b>{metrics['earth_classifier']}</b> | "
+        f"Sunlit = <b style='color:{'#b91c1c' if metrics['earthlimb_sunlit_pr7'] else '#6b7280'};'>"
+        f"{metrics['earthlimb_sunlit_pr7']}</b> | "
+        f"active Earth threshold = <b>{metrics['earth_threshold_deg']:.1f} deg</b> | "
+        f"Earth separation = <b>{metrics['earth_center_sep_deg']:.1f} deg</b>"
+        f"</div>"
+    ),
+    unsafe_allow_html=True,
+)
 header_html = "".join(
     f"""
     <th style="
