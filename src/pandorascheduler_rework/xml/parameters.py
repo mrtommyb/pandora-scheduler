@@ -229,6 +229,13 @@ def populate_vda_parameters(
                     warned.add(column_name)
                 continue
 
+            coordinates = np.atleast_2d(coordinates).astype(float, copy=False)
+            target_ra = row.get("RA")
+            target_dec = row.get("DEC")
+            if coordinates.size and pd.notna(target_ra) and pd.notna(target_dec):
+                coordinates[0, 0] = float(target_ra)
+                coordinates[0, 1] = float(target_dec)
+
             element = ET.SubElement(vda_element, shortened_key)
             for index, coordinate in enumerate(coordinates):
                 tag = "RA" if column_name == "VDA_PredefinedStarRoiRa" else "Dec"

@@ -53,7 +53,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from pandorascheduler_rework.config import PandoraSchedulerConfig
+from pandorascheduler_rework.config import PandoraSchedulerConfig, resolve_data_subdir
 from pandorascheduler_rework.pipeline import SchedulerResult, build_schedule
 from pandorascheduler_rework.science_calendar import (
     ScienceCalendarInputs,
@@ -617,6 +617,10 @@ def main() -> int:
                 float(x.strip()) for x in raw_transit_weights.split(",")
             )
         transit_weights_tuple = tuple(float(x) for x in raw_transit_weights)
+        if len(transit_weights_tuple) != 3:
+            raise ValueError(
+                "transit_scheduling_weights must contain exactly 3 values"
+            )
 
         if target_def_base:
             extra_inputs["target_definition_base"] = Path(str(target_def_base))
@@ -659,6 +663,13 @@ def main() -> int:
                 ["earth_avoidance_deg", "visibility_earth_deg"], args.earth_avoidance, 110.0
             )
         )
+        data_subdir = resolve_data_subdir(
+            extra_inputs,
+            sun_avoidance_deg=sun_avoid,
+            moon_avoidance_deg=moon_avoid,
+            earth_avoidance_deg=earth_avoid,
+        )
+        extra_inputs["data_subdir"] = data_subdir
 
         # Day/night Earth avoidance (None = use uniform earth_avoid)
         _raw_day = _get_val("earth_avoidance_day_deg", args.earth_avoidance_day, None)
@@ -744,13 +755,15 @@ def main() -> int:
         if target_filters is None:
             target_filters = ()
 
+        output_dir = args.output
+
         config = PandoraSchedulerConfig(
             window_start=parse_datetime(args.start),
             window_end=parse_datetime(args.end),
             schedule_step=timedelta(hours=schedule_step_hours),
-            targets_manifest=args.output / "data",
+            targets_manifest=output_dir / data_subdir,
             gmat_ephemeris=gmat_path,
-            output_dir=args.output,
+            output_dir=output_dir,
             # Scheduling Thresholds
             transit_coverage_min=transit_cov,
             min_visibility=min_vis,
@@ -816,6 +829,7 @@ def main() -> int:
                 )
 
         # 4. Run Scheduler (using new API)
+        logger.info("Run data directory: %s", output_dir / data_subdir)
         logger.info("Starting scheduler pipeline...")
         if args.legacy_mode:
             logger.info("Legacy mode enabled - using MJD-based visibility filtering")
@@ -826,8 +840,7 @@ def main() -> int:
         if not args.skip_xml and result.schedule_csv:
             # Use the same config object to create calendar settings
             # Ensure we point to the correct data directory (where manifests are)
-            # The pipeline copies/generates data into output_dir/data
-            data_dir = config.output_dir / "data"
+            data_dir = output_dir / data_subdir
 
             inputs = ScienceCalendarInputs(
                 schedule_csv=result.schedule_csv,

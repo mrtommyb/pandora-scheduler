@@ -17,7 +17,7 @@ from astropy.coordinates import EarthLocation, SkyCoord
 from astropy.time import Time
 from tqdm import tqdm
 
-from pandorascheduler_rework.config import PandoraSchedulerConfig
+from pandorascheduler_rework.config import PandoraSchedulerConfig, resolve_data_subdir
 from pandorascheduler_rework.utils.io import read_csv_cached, read_parquet_cached
 
 from .constraints import (
@@ -90,7 +90,13 @@ def build_visibility_catalog(
     if not config.output_dir:
         raise ValueError("config.output_dir is required for visibility generation")
 
-    output_root = config.output_dir / "data" / output_subpath
+    data_subdir = resolve_data_subdir(
+        config.extra_inputs,
+        sun_avoidance_deg=config.sun_avoidance_deg,
+        moon_avoidance_deg=config.moon_avoidance_deg,
+        earth_avoidance_deg=config.earth_avoidance_deg,
+    )
+    output_root = config.output_dir / data_subdir / output_subpath
     output_root.mkdir(parents=True, exist_ok=True)
 
     target_path = target_list if target_list.is_absolute() else target_list.resolve()

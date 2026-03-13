@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -251,7 +251,7 @@ class PandoraSchedulerConfig:
     target_filters: Sequence[str] = field(default_factory=tuple)
     """Target name filters for visibility generation."""
 
-    extra_inputs: Dict[str, Path] = field(default_factory=dict)
+    extra_inputs: Dict[str, object] = field(default_factory=dict)
     """Additional input files (auxiliary lists, etc.)."""
 
     # ============================================================================
@@ -300,14 +300,6 @@ class PandoraSchedulerConfig:
                 % (self.parallel_workers,)
             )
 
-        # Validate parallel worker count
-        if self.parallel_workers < 0:
-            raise ValueError(
-                "parallel_workers must be >= 0, got %s"
-                % (self.parallel_workers,)
-            )
-
-
 def build_default_data_subdir(
     sun_avoidance_deg: float,
     moon_avoidance_deg: float,
@@ -351,3 +343,6 @@ def resolve_data_subdir(
         raise ValueError(
             "extra_inputs.data_subdir must not include path separators"
         )
+    if candidate in {"", ".", ".."}:
+        raise ValueError("extra_inputs.data_subdir is invalid")
+    return candidate

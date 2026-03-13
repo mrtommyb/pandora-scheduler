@@ -22,6 +22,7 @@ Timing & window
 Paths & data sources
 - `extra_inputs.target_definition_base` (string): path to PandoraTargetList target definition files (example: `/path/to/PandoraTargetList/target_definition_files`).
 - `extra_inputs.visibility_gmat` (string): path to GMAT ephemeris file used to generate visibilities (can also be provided via CLI `--gmat-ephemeris`).
+- `extra_inputs.data_subdir` (string, optional): relative directory name under the run output root used for generated manifests and visibility files. If omitted, the runner derives a default like `data_<sun>_<moon>_<earth>` from the keepout angles.
 
 Scheduling thresholds
 - `transit_coverage_min` (float 0-1, default `0.2`): minimum transit coverage to consider scheduling.
@@ -75,6 +76,7 @@ Extra inputs (pipeline-specific)
   - `target_definition_base`: path to PandoraTargetList files
   - `target_definition_files`: list of which categories to convert into manifests (e.g. `["exoplanet","auxiliary-standard","monitoring-standard","occultation-standard"]`)
   - `generate_visibility`: boolean-like value to request visibility generation
+  - `data_subdir`: optional relative run data directory name; if omitted, one is derived from keepout angles
   - `visibility_gmat`: path to GMAT ephemeris file
   - `visibility_output_root`: optional override for where visibility files are written
   - `skip_manifests`: if true, skip regenerating target manifests (useful during iterative profiling)
