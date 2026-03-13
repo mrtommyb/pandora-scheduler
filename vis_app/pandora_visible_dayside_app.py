@@ -458,7 +458,7 @@ def _plot_simple_geometry(
                 levels=[0.5],
                 colors=["#1f77b4"],
                 linewidths=1.5,
-                linestyles=":",
+                linestyles="-.",
                 zorder=2,
             )
         ax.add_patch(plt.Circle((0.0, 0.0), 1.0, fill=False, color="gray", linewidth=1.5, zorder=3))
