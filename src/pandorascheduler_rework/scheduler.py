@@ -848,6 +848,13 @@ def _schedule_auxiliary_target(
                 state.all_target_obs_time.get(target_label, timedelta()) + duration
             )
 
+    if config.primary_only_mode:
+        result = pd.DataFrame(
+            [["Free Time", start, stop, float("nan"), float("nan")]],
+            columns=row_columns,
+        )
+        return result, "Primary-only mode enabled, skipping non-primary scheduling."
+
     obs_std_duration = timedelta(hours=config.std_obs_duration_hours)
     if (
         active_start - state.last_std_obs

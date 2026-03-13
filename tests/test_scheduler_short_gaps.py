@@ -16,6 +16,7 @@ from pandorascheduler_rework.scheduler import (
     SchedulerInputs,
     SchedulerPaths,
     SchedulerState,
+    _schedule_auxiliary_target,
     _schedule_primary_target,
 )
 
@@ -165,6 +166,49 @@ class TestShortGapHandling:
             # Auxiliary scheduler SHOULD be called for a 10-minute gap
             mock_aux.assert_called_once()
 
+    def test_primary_only_gap_becomes_free_time(self, mock_state, mock_inputs):
+        """Primary-only mode should convert a pre-primary gap into Free Time."""
+        config = PandoraSchedulerConfig(
+            window_start=datetime(2026, 1, 1),
+            window_end=datetime(2026, 2, 1),
+            output_dir="/tmp/test_output",
+            min_sequence_minutes=5,
+            primary_only_mode=True,
+        )
+
+        start = datetime(2026, 2, 5, 12, 0, 0)
+        obs_start = datetime(2026, 2, 5, 12, 10, 0)
+        obs_stop = obs_start + timedelta(hours=6)
+
+        temp_df = pd.DataFrame([{
+            "Planet Name": "TestPlanet",
+            "RA": 90.0,
+            "DEC": 45.0,
+            "Obs Start": obs_start,
+            "Visit Duration": timedelta(hours=6),
+            "Transit Coverage": 1.0,
+            "SAA Overlap": 0.0,
+            "Schedule Factor": 1.0,
+            "Quality Factor": 1.0,
+            "Transit Factor": 5.0,
+        }])
+
+        obs_range = pd.date_range(start, obs_stop, freq="min")
+
+        result = _schedule_primary_target(
+            temp_df,
+            mock_state,
+            mock_inputs,
+            config,
+            start,
+            obs_range,
+        )
+
+        free_time_rows = result[result["Target"] == "Free Time"]
+        assert len(free_time_rows) == 1
+        assert free_time_rows.iloc[0]["Observation Start"] == start
+        assert free_time_rows.iloc[0]["Observation Stop"] == obs_start
+
     def test_exact_threshold_gap_becomes_free_time(self, mock_config, mock_state, mock_inputs):
         """A gap exactly equal to min_sequence_minutes should become Free Time.
         
@@ -257,15 +301,91 @@ class TestShortWindowAfterSTD:
             "Priority": 1.0,
         }])
         std_df.to_csv(std_csv, index=False)
-        
+
+
+class TestPrimaryOnlyMode:
+    """Test that primary-only mode skips non-primary scheduling entirely."""
+
+    def test_auxiliary_scheduler_returns_free_time_in_primary_only_mode(self, tmp_path):
+        start = datetime(2026, 2, 5, 12, 0, 0)
+        stop = datetime(2026, 2, 5, 13, 0, 0)
+
+        config = PandoraSchedulerConfig(
+            window_start=datetime(2026, 1, 1),
+            window_end=datetime(2026, 2, 1),
+            output_dir=str(tmp_path),
+            min_sequence_minutes=5,
+            primary_only_mode=True,
+        )
+
+        state = MagicMock(spec=SchedulerState)
+        state.last_std_obs = datetime(2026, 1, 1)
+        state.non_primary_obs_time = {}
+        state.all_target_obs_time = {}
+
+        inputs = MagicMock(spec=SchedulerInputs)
+
+        result, log_info = _schedule_auxiliary_target(
+            start,
+            stop,
+            config,
+            state,
+            inputs,
+        )
+
+        assert log_info == "Primary-only mode enabled, skipping non-primary scheduling."
+        assert len(result) == 1
+        assert result.iloc[0]["Target"] == "Free Time"
+        assert result.iloc[0]["Observation Start"] == start
+        assert result.iloc[0]["Observation Stop"] == stop
+        assert state.all_target_obs_time == {}
+
+
+class TestShortWindowAfterSTDContinuation:
+    """Test STD handling when the post-STD remainder is too short."""
+
+    def test_std_absorbs_short_post_std_remainder(self, tmp_path):
+        config = PandoraSchedulerConfig(
+            window_start=datetime(2026, 1, 1),
+            window_end=datetime(2026, 2, 1),
+            output_dir=str(tmp_path),
+            min_sequence_minutes=5,
+            std_obs_duration_hours=0.5,
+            std_obs_frequency_days=1,
+            aux_sort_key="sort_by_tdf_priority",
+        )
+
+        state = MagicMock(spec=SchedulerState)
+        state.last_std_obs = datetime(2026, 1, 1)
+        state.non_primary_obs_time = {}
+        state.all_target_obs_time = {}
+
+        inputs = MagicMock(spec=SchedulerInputs)
+        inputs.target_definition_files = ["primary"]
+        inputs.paths = MagicMock(spec=SchedulerPaths)
+        inputs.paths.data_dir = tmp_path
+        inputs.paths.aux_targets_dir = tmp_path / "aux_targets"
+
+        std_csv = tmp_path / "monitoring-standard_targets.csv"
+        std_df = pd.DataFrame([
+            {
+                "Star Name": "TestSTD",
+                "RA": 0.0,
+                "DEC": 0.0,
+                "Priority": 1.0,
+            }
+        ])
+        std_df.to_csv(std_csv, index=False)
+
         # Create visibility file for STD
         std_vis_dir = tmp_path / "aux_targets" / "TestSTD"
         std_vis_dir.mkdir(parents=True)
         std_vis_file = std_vis_dir / "Visibility for TestSTD.parquet"
-        
+
         # Create visibility data that covers the window
         # Need both Time(MJD_UTC) and Time_UTC columns for compatibility
         from astropy.time import Time as AstropyTime
+
         time_utc = pd.date_range(
             "2026-10-01 22:32:00", "2026-10-01 23:05:00", freq="min"
         )
@@ -276,16 +396,16 @@ class TestShortWindowAfterSTD:
             "Visible": [1] * len(time_utc),
         })
         vis_df.to_parquet(std_vis_file)
-        
+
         # Schedule with a 31-minute window (22:32 to 23:03)
         # STD takes 30 min, leaving only 1 minute
         start = datetime(2026, 10, 1, 22, 32, 0)
         stop = datetime(2026, 10, 1, 23, 3, 0)  # 31 minutes later
-        
+
         result, log_info = _schedule_auxiliary_target(
             start, stop, config, state, inputs
         )
-        
+
         # Should have STD observation — the 1-minute post-STD remainder
         # is too short for an aux observation, so the STD row is extended
         # to absorb it (no Free Time).
@@ -293,7 +413,7 @@ class TestShortWindowAfterSTD:
         assert len(std_rows) == 1
         assert std_rows.iloc[0]["Observation Start"] == start
         assert std_rows.iloc[0]["Observation Stop"] == stop  # extended to end of gap
-        
+
         # No Free Time — the STD absorbed the short remainder
         free_rows = result[result["Target"] == "Free Time"]
         assert len(free_rows) == 0

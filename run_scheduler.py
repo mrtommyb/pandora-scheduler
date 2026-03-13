@@ -255,6 +255,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip generation of the science calendar XML",
     )
+    parser.add_argument(
+        "--primary-only",
+        action="store_true",
+        help="Only schedule primary science targets; skip non-primary gap filling",
+    )
 
     # Profiling configuration
     parser.add_argument(
@@ -732,6 +737,9 @@ def main() -> int:
         std_obs_frequency_days = float(_get_val("std_obs_frequency_days", None, 3.0))
 
         force_regenerate = bool(_get_val("force_regenerate", None, False))
+        primary_only_mode = bool(
+            _get_val("primary_only_mode", args.primary_only, False)
+        )
         use_target_list_for_occultations = bool(
             _get_val("use_target_list_for_occultations", None, False)
         )
@@ -803,6 +811,7 @@ def main() -> int:
             # Flags
             show_progress=show_progress,
             force_regenerate=force_regenerate,
+            primary_only_mode=primary_only_mode,
             use_target_list_for_occultations=use_target_list_for_occultations,
             prioritise_occultations_by_slew=prioritise_occultations_by_slew,
             use_legacy_mode=use_legacy_mode,

@@ -190,6 +190,9 @@ class PandoraSchedulerConfig:
     force_regenerate: bool = False
     """Force regeneration of files even if they exist."""
 
+    primary_only_mode: bool = False
+    """Disable non-primary gap-filling observations."""
+
     use_target_list_for_occultations: bool = False
     """Use target list for occultation scheduling (vs. separate list)."""
 
