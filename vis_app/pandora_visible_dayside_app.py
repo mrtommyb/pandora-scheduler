@@ -301,6 +301,37 @@ def _nearest_limb_tangent_direction(sc_vec_km: np.ndarray, target_hat: np.ndarra
     return _unit(np.cos(earth_angular_radius) * nadir + np.sin(earth_angular_radius) * limb_dir)
 
 
+def _dayside_visible_mask(
+    i: int,
+    j: int,
+    sc_hat: np.ndarray,
+    thr: float,
+    sun_hat: np.ndarray,
+    ngrid: int = 260,
+):
+    k = 3 - i - j
+    ugrid = np.linspace(-1.0, 1.0, ngrid)
+    vgrid = np.linspace(-1.0, 1.0, ngrid)
+    U, V = np.meshgrid(ugrid, vgrid)
+    R2 = U * U + V * V
+    inside = R2 <= 1.0
+    W = np.sqrt(np.clip(1.0 - R2, 0.0, None))
+
+    d_front = np.abs(sc_hat[k] - W)
+    d_back = np.abs(sc_hat[k] + W)
+    depth = np.where(d_front <= d_back, W, -W)
+
+    n = np.zeros(U.shape + (3,), dtype=float)
+    n[..., i] = U
+    n[..., j] = V
+    n[..., k] = depth
+
+    dot_s = np.einsum("...i,i->...", n, sun_hat)
+    dot_sc = np.einsum("...i,i->...", n, sc_hat)
+    mask = inside & (dot_s >= 0.0) & (dot_sc >= thr)
+    return U, V, mask
+
+
 def _panel_mask(
     i: int,
     j: int,
@@ -354,6 +385,7 @@ def _plot_simple_geometry(
     show_earth_frame: bool = True,
     show_xz_helpers: bool = True,
     show_moon_arrow: bool = False,
+    show_dayside_visible_outline: bool = False,
     time_utc: str | Time | None = None,
 ):
     sun_hat, sun_time, sun_lon_deg, sun_lat_deg = _sun_hat_now_ecliptic(time_utc=time_utc)
@@ -750,6 +782,7 @@ with st.sidebar:
     show_earth_frame = st.checkbox("Show Earth equator & axis", value=False)
     show_xz_helpers = st.checkbox("Show Earth-center/limb vectors", value=False)
     show_moon_arrow = st.checkbox("Show direction to Moon", value=False)
+    show_dayside_visible_outline = st.checkbox("Show total dayside visible", value=False)
     use_now = st.checkbox("Time = now", key="use_now")
     if use_now:
         time_utc = None
@@ -780,6 +813,7 @@ fig, metrics = _plot_simple_geometry(
     show_earth_frame=show_earth_frame,
     show_xz_helpers=show_xz_helpers,
     show_moon_arrow=show_moon_arrow,
+    show_dayside_visible_outline=show_dayside_visible_outline,
     time_utc=time_utc,
 )
 
