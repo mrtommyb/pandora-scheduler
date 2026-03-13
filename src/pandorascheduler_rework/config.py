@@ -145,6 +145,18 @@ class PandoraSchedulerConfig:
     prioritise_occultations_by_slew: bool = False
     """Prioritize occultation targets by slew angle."""
 
+    primary_only_mode: bool = False
+    """Schedule only primary targets; leave all other windows as Free Time."""
+
+    enable_occultation_xml: bool = True
+    """Enable occultation-target calculations during XML generation."""
+
+    enable_occultation_pass1: bool = True
+    """Enable Pass 1 in occultation target assignment (single target covers all intervals)."""
+
+    strict_occultation_time_limits: bool = True
+    """When true, never schedule occultation targets beyond requested-hour limits."""
+
     # ============================================================================
     # LEGACY COMPATIBILITY
     # ============================================================================

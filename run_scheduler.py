@@ -66,8 +66,7 @@ def setup_logging(verbose: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+        format="%(levelname)s - %(message)s",
     )
 
 
@@ -216,6 +215,11 @@ def parse_args() -> argparse.Namespace:
             "When enabled, uses MJD-based visibility filtering which matches the original "
             "scheduler exactly. Default (disabled) uses improved datetime-based filtering."
         ),
+    )
+    parser.add_argument(
+        "--primary-only",
+        action="store_true",
+        help="Schedule only primary targets; leave non-primary windows as Free Time.",
     )
 
     return parser.parse_args()
@@ -481,6 +485,20 @@ def main() -> int:
                     return json_config[key]
             return default
 
+        def _as_bool(value: Any, default: bool = False) -> bool:
+            if value is None:
+                return default
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized == "":
+                    return default
+                return normalized in {"1", "true", "yes", "y", "on"}
+            if isinstance(value, (int, float)):
+                return bool(value)
+            return default
+
         # Default weights if not provided
         transit_scheduling_weights = (0.8, 0.0, 0.2)
 
@@ -505,15 +523,13 @@ def main() -> int:
             )
             return 1
 
-        # Determine whether visibility generation was requested (CLI or JSON)
-        generate_visibility = bool(args.generate_visibility) or (
-            str(
-                extra_inputs.get(
-                    "generate_visibility", json_config.get("generate_visibility", "")
-                )
-            ).lower()
-            in {"1", "true", "yes", "y"}
-        )
+        # Determine whether visibility generation is effectively enabled.
+        # Explicit `extra_inputs.generate_visibility` overrides implicit GMAT behavior.
+        explicit_generate_visibility = extra_inputs.get("generate_visibility")
+        if explicit_generate_visibility is None:
+            generate_visibility = bool(args.generate_visibility) or bool(visibility_gmat)
+        else:
+            generate_visibility = _as_bool(explicit_generate_visibility, False)
         # `config` is not yet constructed here, so check the CLI/ENV visibility GMAT
         if generate_visibility and visibility_gmat is None:
             logger.warning(
@@ -580,6 +596,8 @@ def main() -> int:
                 ["earth_avoidance_deg", "visibility_earth_deg"], args.earth_avoidance, 86.0
             )
         )
+        data_subdir = f"data_{int(sun_avoid)}_{int(moon_avoid)}_{int(earth_avoid)}"
+        extra_inputs["data_subdir"] = data_subdir
 
         short_visit_threshold_hours = float(
             _get_val("short_visit_threshold_hours", None, 12.0)
@@ -608,11 +626,30 @@ def main() -> int:
         prioritise_occultations_by_slew = bool(
             _get_val("prioritise_occultations_by_slew", None, False)
         )
+        enable_occultation_xml = _as_bool(
+            _get_any(
+                ["generate_occultation_xml", "enable_occultation_xml"], None, True
+            ),
+            True,
+        )
+        enable_occultation_pass1 = _as_bool(
+            _get_any(
+                ["one_occultation_target", "enable_occultation_pass1"], None, True
+            ),
+            True,
+        )
+        strict_occultation_time_limits = _as_bool(
+            _get_val("strict_occultation_time_limits", None, True), True
+        )
 
         commissioning_days = int(_get_val("commissioning_days", None, 0))
 
         show_progress = bool(_get_val("show_progress", args.show_progress, False))
         use_legacy_mode = bool(_get_any(["use_legacy_mode", "legacy_mode"], args.legacy_mode, False))
+        primary_only_mode = _as_bool(
+            _get_any(["primary_only_mode", "primary_only"], args.primary_only, False),
+            False,
+        )
 
         aux_sort_key = str(_get_val("aux_sort_key", None, "sort_by_tdf_priority"))
         author = _get_val("author", None, None)
@@ -626,7 +663,7 @@ def main() -> int:
             window_start=parse_datetime(args.start),
             window_end=parse_datetime(args.end),
             schedule_step=timedelta(hours=schedule_step_hours),
-            targets_manifest=args.output / "data",
+            targets_manifest=args.output / data_subdir,
             gmat_ephemeris=gmat_path,
             output_dir=args.output,
             # Scheduling Thresholds
@@ -659,6 +696,10 @@ def main() -> int:
             use_target_list_for_occultations=use_target_list_for_occultations,
             prioritise_occultations_by_slew=prioritise_occultations_by_slew,
             use_legacy_mode=use_legacy_mode,
+            primary_only_mode=primary_only_mode,
+            enable_occultation_xml=enable_occultation_xml,
+            enable_occultation_pass1=enable_occultation_pass1,
+            strict_occultation_time_limits=strict_occultation_time_limits,
             # Sorting / metadata
             aux_sort_key=aux_sort_key,
             author=author,
@@ -681,6 +722,26 @@ def main() -> int:
                 )
 
         # 4. Run Scheduler (using new API)
+        logger.info(
+            "Keepout angles (deg): sun=%.1f, moon=%.1f, earth=%.1f",
+            config.sun_avoidance_deg,
+            config.moon_avoidance_deg,
+            config.earth_avoidance_deg,
+        )
+        logger.info("Data directory: %s", config.output_dir / data_subdir)
+        logger.info("GENERATE_VISIBILITY_FILES=%s", str(generate_visibility).upper())
+        logger.info("PRIMARY_ONLY_MODE=%s", str(primary_only_mode).upper())
+        logger.info(
+            "GENERATE_OCCULTATION_XML=%s", str(enable_occultation_xml).upper()
+        )
+        logger.info(
+            "ONE_OCC_TARGET_FOR_ALL_INTERVALS=%s",
+            str(enable_occultation_pass1).upper(),
+        )
+        logger.info(
+            "STRICT_OCCULTATION_TIME_LIMITS=%s",
+            str(strict_occultation_time_limits).upper(),
+        )
         logger.info("Starting scheduler pipeline...")
         if args.legacy_mode:
             logger.info("Legacy mode enabled - using MJD-based visibility filtering")
@@ -692,7 +753,8 @@ def main() -> int:
             # Use the same config object to create calendar settings
             # Ensure we point to the correct data directory (where manifests are)
             # The pipeline copies/generates data into output_dir/data
-            data_dir = config.output_dir / "data"
+            data_dir_name = str(config.extra_inputs.get("data_subdir", "data"))
+            data_dir = config.output_dir / data_dir_name
 
             inputs = ScienceCalendarInputs(
                 schedule_csv=result.schedule_csv,
@@ -702,6 +764,7 @@ def main() -> int:
             xml_path = generate_science_calendar(
                 inputs=inputs,
                 config=config,
+                output_path=config.output_dir / "Pandora_science_calendar.xml",
             )
             logger.info(f"Science calendar written to: {xml_path}")
 

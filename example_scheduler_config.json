@@ -14,7 +14,7 @@
 
   "# XML / sequence generation options": null,
   "obs_sequence_duration_min": 90,
-  "occ_sequence_limit_min": 50,
+  "occ_sequence_limit_min": 20,
   "min_sequence_minutes": 5,
   "break_occultation_sequences": true,
 
@@ -24,13 +24,20 @@
 
   "# Behavior flags": null,
   "force_regenerate": false,
+  "use_legacy_mode": false,
+  "primary_only_mode": false,
+
+  "# Occultation XML controls: generate_occultation_xml toggles occultation filling in XML; one_occultation_target toggles Pass 1 (single target must cover all intervals).": null,
+  "generate_occultation_xml": true,
+  "one_occultation_target": false,
+  "strict_occultation_time_limits": false,
   "use_target_list_for_occultations": false,
   "prioritise_occultations_by_slew": false,
 
   "# Keepout / avoidance angles (degrees)": null,
   "visibility_sun_deg": 91.0,
   "visibility_moon_deg": 25.0,
-  "visibility_earth_deg": 86.0,
+  "visibility_earth_deg": 96.0,
 
   "# Other scheduling thresholds": null,
   "commissioning_days": 0,
@@ -43,15 +50,15 @@
 
   "# Extra inputs used by pipeline (paths and small flags)": null,
   "extra_inputs": {
-    "target_definition_base": "/path/to/PandoraTargetList/target_definition_files",
+    "target_definition_base": ".../PandoraTargetList/target_definition_files",
     "target_definition_files": [
       "exoplanet",
       "auxiliary-standard",
       "monitoring-standard",
       "occultation-standard"
     ],
-    "generate_visibility": true,
-    "visibility_gmat": "src/pandorascheduler/data/Pandora-600km-withoutdrag-20251018.txt",
+    "generate_visibility": false,
+    "visibility_gmat": "gmat/PAN-GMAT-COM-20260303-VF-20260303-EX-20270403-R001.txt",
     "visibility_output_root": null,
     "skip_manifests": false
   }

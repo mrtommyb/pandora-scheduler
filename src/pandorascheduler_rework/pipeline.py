@@ -62,10 +62,11 @@ def build_schedule(config: PandoraSchedulerConfig) -> SchedulerResult:
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    data_subdir = _resolve_data_subdir(config)
+
     # Filesystem layout for this run. Use the run's `output_dir` as the
-    # package root so generated data lives under `<output_dir>/data` which
-    # matches the expectations of downstream components.
-    paths = SchedulerPaths.from_package_root(output_dir)
+    # package root so generated data lives under `<output_dir>/<data_subdir>`.
+    paths = SchedulerPaths.from_package_root(output_dir, data_subdir=data_subdir)
 
     # Prepare extra_inputs
     extra_inputs = config.extra_inputs
@@ -73,7 +74,7 @@ def build_schedule(config: PandoraSchedulerConfig) -> SchedulerResult:
     # When generating target manifests from a provided target definition base,
     # write the generated CSV manifests into the run's output data directory so
     # subsequent steps (visibility & calendar generation) can find them there.
-    out_data = output_dir / "data"
+    out_data = output_dir / data_subdir
 
     # We need to resolve these paths now to pass to target manifest generation
     # IMPORTANT: Use absolute paths to avoid legacy folder lookups
@@ -286,13 +287,18 @@ def _maybe_generate_visibility(
     occultation_target_csv: Path,
 ) -> None:
     # Determine whether we should generate visibility.
-    # Default: True when a GMAT ephemeris is provided, or when explicitly requested.
-    generate_visibility = bool(config.gmat_ephemeris) or bool(
-        str(config.extra_inputs.get("generate_visibility", "")).lower()
-        in {"1", "true", "yes", "y"}
-    )
+    # Explicit extra_inputs.generate_visibility overrides implicit GMAT behavior:
+    #   true  -> generate
+    #   false -> skip (even if GMAT path is present)
+    #   unset -> default to generating when GMAT ephemeris is provided
+    explicit_generate_flag = config.extra_inputs.get("generate_visibility")
+    if explicit_generate_flag is None:
+        generate_visibility = bool(config.gmat_ephemeris)
+    else:
+        generate_visibility = _as_bool(explicit_generate_flag, False)
 
     if not generate_visibility:
+        LOGGER.info("Skipping visibility generation (generate_visibility=False)")
         return
 
     # 1. Primary Targets -> data/targets
@@ -369,15 +375,19 @@ def _generate_target_manifests(
     occultation_target_csv: Path,
 ) -> None:
     mapping = {
-        0: primary_target_csv,
-        1: auxiliary_target_csv,
-        2: monitoring_target_csv,
-        3: occultation_target_csv,
+        "exoplanet": primary_target_csv,
+        "auxiliary-standard": auxiliary_target_csv,
+        "monitoring-standard": monitoring_target_csv,
+        "occultation-standard": occultation_target_csv,
     }
 
-    for index, category in enumerate(target_definition_files):
-        destination = mapping.get(index)
+    for category in target_definition_files:
+        destination = mapping.get(str(category))
         if destination is None:
+            LOGGER.warning(
+                "Skipping unsupported target definition category %r while generating manifests",
+                category,
+            )
             continue
 
         manifest = rework_helper.process_target_files(
@@ -389,7 +399,7 @@ def _generate_target_manifests(
 
     rework_helper.create_aux_list(
         target_definition_files,
-        primary_target_csv.parent.parent,
+        primary_target_csv.parent,
     )
 
 
@@ -428,6 +438,28 @@ def _target_definition_from_csv(path: Path) -> str:
     return stem
 
 
+def _resolve_data_subdir(config: PandoraSchedulerConfig) -> str:
+    raw = config.extra_inputs.get("data_subdir")
+    if raw is not None and str(raw).strip() != "":
+        candidate = str(raw).strip()
+        path_candidate = Path(candidate)
+        if path_candidate.is_absolute():
+            raise ValueError(
+                "extra_inputs.data_subdir must be a simple relative directory name"
+            )
+        if path_candidate.name != candidate:
+            raise ValueError(
+                "extra_inputs.data_subdir must not include path separators"
+            )
+        if candidate in {"", ".", ".."}:
+            raise ValueError("extra_inputs.data_subdir is invalid")
+        return candidate
+    sun = int(float(config.sun_avoidance_deg))
+    moon = int(float(config.moon_avoidance_deg))
+    earth = int(float(config.earth_avoidance_deg))
+    return f"data_{sun}_{moon}_{earth}"
+
+
 def _as_bool(value: object, default: bool) -> bool:
     if value is None:
         return default
@@ -441,5 +473,3 @@ def _as_bool(value: object, default: bool) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     return default
-
-

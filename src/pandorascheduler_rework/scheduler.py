@@ -98,8 +98,10 @@ class SchedulerPaths:
     baseline_dir: Path
 
     @classmethod
-    def from_package_root(cls, package_dir: Path) -> "SchedulerPaths":
-        data_dir = package_dir / "data"
+    def from_package_root(
+        cls, package_dir: Path, data_subdir: str = "data"
+    ) -> "SchedulerPaths":
+        data_dir = package_dir / data_subdir
         return cls(
             package_dir=package_dir,
             data_dir=data_dir,
@@ -247,6 +249,7 @@ def run_scheduler(
             short_visit_threshold_hours=config.short_visit_threshold_hours,
             short_visit_edge_buffer_hours=config.short_visit_edge_buffer_hours,
             long_visit_edge_buffer_hours=config.long_visit_edge_buffer_hours,
+            use_legacy_mode=config.use_legacy_mode,
         )
 
         too_result = _handle_targets_of_opportunity(
@@ -669,6 +672,8 @@ def _handle_targets_of_opportunity(
 
     schedule_parts: list[pd.DataFrame] = []
     forced_observation = False
+    obs_window_start = obs_range[0]
+    obs_window_stop = obs_range[-1]
 
     # Batch-load all transit windows once
     # all_active_names = tracker.loc[positive_needed].index
@@ -699,14 +704,20 @@ def _handle_targets_of_opportunity(
         if early_start > late_start:
             continue
 
-        start_range = pd.date_range(early_start, late_start, freq="min")
-        overlap_times = obs_range.intersection(start_range)
-
-        if len(overlap_times) == 0:
-            continue
+        if config.use_legacy_mode:
+            start_range = pd.date_range(early_start, late_start, freq="min")
+            overlap_times = obs_range.intersection(start_range)
+            if len(overlap_times) == 0:
+                continue
+            forced_start = overlap_times[0].to_pydatetime()
+        else:
+            overlap_start = max(pd.Timestamp(early_start), obs_window_start)
+            overlap_stop = min(pd.Timestamp(late_start), obs_window_stop)
+            if overlap_start > overlap_stop:
+                continue
+            forced_start = overlap_start.to_pydatetime()
 
         forced_observation = True
-        forced_start = overlap_times[0].to_pydatetime()
 
         if obs_range[0].to_pydatetime() < forced_start:
             free_df = pd.DataFrame(
@@ -777,10 +788,15 @@ def _handle_targets_of_opportunity(
         if early_start > late_start:
             continue
 
-        start_range = pd.date_range(early_start, late_start, freq="min")
-        overlap_times = obs_range.intersection(start_range)
+        if config.use_legacy_mode:
+            start_range = pd.date_range(early_start, late_start, freq="min")
+            overlap_exists = len(obs_range.intersection(start_range)) > 0
+        else:
+            overlap_start = max(pd.Timestamp(early_start), obs_window_start)
+            overlap_stop = min(pd.Timestamp(late_start), obs_window_stop)
+            overlap_exists = overlap_start <= overlap_stop
 
-        if len(overlap_times) > 0 and tf_ratio > 1:
+        if overlap_exists and tf_ratio > 1:
             tf_warning_messages.append(
                 f"Warning: {planet_name} has MTRM > 1 and is transiting during ToO."
             )
@@ -826,10 +842,31 @@ def _schedule_auxiliary_target(
     state: SchedulerState,
     inputs: SchedulerInputs,
 ) -> tuple[pd.DataFrame, str]:
+    if config.primary_only_mode:
+        result = pd.DataFrame(
+            [["Free Time", start, stop, float("nan"), float("nan"), ""]],
+            columns=[
+                "Target",
+                "Observation Start",
+                "Observation Stop",
+                "RA",
+                "DEC",
+                "Comments",
+            ],
+        )
+        return result, "Primary-only mode enabled; leaving remaining window as Free Time."
+
     # `obs_range` was previously created here but not used; remove to satisfy lint
     active_start = start
     scheduled_rows: list[list] = []
-    row_columns = ["Target", "Observation Start", "Observation Stop", "RA", "DEC"]
+    row_columns = [
+        "Target",
+        "Observation Start",
+        "Observation Stop",
+        "RA",
+        "DEC",
+        "Comments",
+    ]
 
     obs_std_duration = timedelta(hours=config.std_obs_duration_hours)
     if (
@@ -908,9 +945,7 @@ def _schedule_auxiliary_target(
 
         std_name, std_ra, std_dec, priority_std = std_candidate
         std_end = active_start + obs_std_duration
-        scheduled_rows.append(
-            [f"{std_name} STD", active_start, std_end, std_ra, std_dec]
-        )
+        scheduled_rows.append([f"{std_name} STD", active_start, std_end, std_ra, std_dec, ""])
         active_start = std_end
         state.last_std_obs = active_start
 
@@ -932,7 +967,7 @@ def _schedule_auxiliary_target(
             stop,
         )
         scheduled_rows.append(
-            ["Free Time", active_start, stop, float("nan"), float("nan")]
+            ["Free Time", active_start, stop, float("nan"), float("nan"), ""]
         )
         result = pd.DataFrame(scheduled_rows, columns=row_columns)
         for record in result.to_dict(orient="records"):
@@ -949,7 +984,7 @@ def _schedule_auxiliary_target(
 
     if config.aux_sort_key is None:
         scheduled_rows.append(
-            ["Free Time", active_start, stop, float("nan"), float("nan")]
+            ["Free Time", active_start, stop, float("nan"), float("nan"), ""]
         )
         result = pd.DataFrame(scheduled_rows, columns=row_columns)
         for record in result.to_dict(orient="records"):
@@ -966,9 +1001,10 @@ def _schedule_auxiliary_target(
 
     selected_row: Optional[list] = None
     priority_val = 0.0
-    log_info = "No fuly or partially visible non-primary targets, Free Time..."
+    log_info = "No fully or partially visible non-primary targets, Free Time..."
     selected_requested_hours: float | None = None
     selected_observed_hours: float | None = None
+    selected_comment = ""
     fallback_over_requested_used = False
     non_primary_priorities = {
         name: stats.last_priority
@@ -1130,14 +1166,15 @@ def _schedule_auxiliary_target(
             elif vis_any:
                 any_idx = int(np.asarray(vis_percentages).argmax())
                 best_visibility = vis_percentages[any_idx]
-                if best_visibility >= 100 * config.min_visibility:
-                    chosen_idx = vis_any[any_idx]
-                else:
+                chosen_idx = vis_any[any_idx]
+                if best_visibility < 100 * config.min_visibility:
                     logger.warning(
-                        "No non-primary target with visibility greater than %.2f%% from %s",
+                        "Best non-primary visibility %.2f%% is below min_visibility %.2f%% for %s; scheduling best available target anyway",
+                        best_visibility,
                         100 * config.min_visibility,
                         target_def,
                     )
+                    selected_comment = f"Visibility = {best_visibility:.2f}%"
 
             if chosen_idx is None:
                 continue
@@ -1164,7 +1201,9 @@ def _schedule_auxiliary_target(
                     f"{name} scheduled with {float(best_visibility or 0.0):.2f}% visibility"
                 )
 
-            scheduled_rows.append([name, active_start, stop, ra_val, dec_val])
+            scheduled_rows.append(
+                [name, active_start, stop, ra_val, dec_val, selected_comment]
+            )
             logger.info(
                 "%s scheduled for non-primary observations from %s",
                 name,
@@ -1175,7 +1214,7 @@ def _schedule_auxiliary_target(
 
     if selected_row is None:
         scheduled_rows.append(
-            ["Free Time", active_start, stop, float("nan"), float("nan")]
+            ["Free Time", active_start, stop, float("nan"), float("nan"), ""]
         )
     else:
         name = selected_row[0]
@@ -1283,6 +1322,7 @@ def _schedule_primary_target(
     saa_cover = first_row["SAA Overlap"]
     s_factor = first_row["Schedule Factor"]
     q_factor = first_row["Quality Factor"]
+    primary_comment = _primary_transit_comment(inputs.target_list, planet_name)
 
     dfs: list[pd.DataFrame] = []
 
@@ -1337,7 +1377,7 @@ def _schedule_primary_target(
                 saa_cover,
                 s_factor,
                 q_factor,
-                np.nan,
+                primary_comment,
             ]
         ],
         columns=[
@@ -1380,3 +1420,48 @@ def _schedule_primary_target(
     )
 
     return pd.concat(dfs, ignore_index=True)
+
+
+def _primary_transit_comment(target_list: pd.DataFrame, planet_name: str) -> str:
+    """Label primary scheduled targets.
+
+    Prefer the explicit manifest column `Primary Target` when available.
+    Fall back to `Number of Transits to Capture` (from `transits_req` in
+    exoplanet_priorities.csv) to preserve legacy behaviour.
+    """
+    if "Planet Name" not in target_list.columns:
+        return "secondary exoplanet transits"
+
+    match = target_list.loc[target_list["Planet Name"] == planet_name]
+    if match.empty:
+        return "secondary exoplanet transits"
+
+    if "Primary Target" in target_list.columns:
+        primary_value = match["Primary Target"].iloc[0]
+        if pd.notna(primary_value):
+            flag = str(primary_value).strip().lower()
+            if flag in {"y", "yes", "true", "primary", "1"}:
+                return "primary exoplanet transits"
+            if flag in {"n", "no", "false", "secondary", "0"}:
+                return "secondary exoplanet transits"
+
+    if "Number of Transits to Capture" not in target_list.columns:
+        return "secondary exoplanet transits"
+
+    value = pd.to_numeric(
+        match["Number of Transits to Capture"], errors="coerce"
+    ).iloc[0]
+    if pd.isna(value):
+        return "secondary exoplanet transits"
+
+    # NOTE:
+    # The legacy scheduler (via exoplanet_priorities.csv / transits_req) treated
+    # planets with exactly 10 requested transits as "primary" and all other counts
+    # as "secondary". We intentionally preserve that behaviour here instead of
+    # using a >= threshold so that re-runs reproduce historical schedules.
+    PRIMARY_TRANSIT_COUNT_THRESHOLD = 10
+    return (
+        "primary exoplanet transits"
+        if int(round(float(value))) == PRIMARY_TRANSIT_COUNT_THRESHOLD
+        else "secondary exoplanet transits"
+    )
