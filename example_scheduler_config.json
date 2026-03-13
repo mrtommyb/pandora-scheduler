@@ -27,6 +27,9 @@
   "primary_only_mode": false,
   "use_target_list_for_occultations": false,
   "prioritise_occultations_by_slew": false,
+  "enable_occultation_xml": true,
+  "enable_occultation_pass1": true,
+  "strict_occultation_time_limits": true,
 
   "# Keepout / avoidance angles (degrees)": null,
   "visibility_sun_deg": 91.0,

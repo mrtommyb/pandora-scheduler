@@ -64,6 +64,9 @@ Behavior flags
 - `primary_only_mode` (bool, default `false`): only schedule primary science targets; convert non-primary gap-fill windows into `Free Time`.
 - `use_target_list_for_occultations` (bool, default `false`): use the target list for occultation scheduling instead of a separate list.
 - `prioritise_occultations_by_slew` (bool, default `false`): prioritise occultation targets based on slew cost.
+- `enable_occultation_xml` (bool, default `true`): include occultation-target calculations when generating the science-calendar XML. Set to `false` to emit only visible-segment entries.
+- `enable_occultation_pass1` (bool, default `true`): run Pass 1 of the occultation search (single target covers all intervals). Set to `false` to skip directly to the multi-target greedy search (Pass 2).
+- `strict_occultation_time_limits` (bool, default `true`): raise an error when a target's requested-hours value cannot be found in the catalog. Set to `false` to log a warning and use a large fallback limit instead.
 
 Auxiliary sorting & metadata
 - `aux_sort_key` (string, default `"sort_by_tdf_priority"`): key used to sort auxiliary targets

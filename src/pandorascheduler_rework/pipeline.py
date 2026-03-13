@@ -291,12 +291,17 @@ def _maybe_generate_visibility(
     monitoring_target_csv: Path,
     occultation_target_csv: Path,
 ) -> None:
-    # Determine whether we should generate visibility.
-    # Default: True when a GMAT ephemeris is provided, or when explicitly requested.
-    generate_visibility = bool(config.gmat_ephemeris) or bool(
-        str(config.extra_inputs.get("generate_visibility", "")).lower()
-        in {"1", "true", "yes", "y"}
-    )
+    # Three-way generate_visibility logic:
+    #   explicit "true"/"yes"/"1"  -> always generate
+    #   explicit "false"/"no"/"0"  -> never generate (even with GMAT)
+    #   unset / empty              -> default to GMAT ephemeris presence
+    raw = str(config.extra_inputs.get("generate_visibility", "")).strip().lower()
+    if raw in {"1", "true", "yes", "y"}:
+        generate_visibility = True
+    elif raw in {"0", "false", "no", "n"}:
+        generate_visibility = False
+    else:
+        generate_visibility = bool(config.gmat_ephemeris)
 
     if not generate_visibility:
         return

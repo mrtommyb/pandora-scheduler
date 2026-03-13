@@ -102,28 +102,56 @@ class _ScienceCalendarBuilder:
         """Get the time limit for an occultation target.
 
         Looks up 'Number of Hours Requested' from the occultation manifest.
-        Raises ValueError if the catalog is missing, the target is not found,
-        or the required column is missing.
+
+        When ``strict_occultation_time_limits`` is True (default), raises
+        ValueError if the catalog is missing, the target is not found, or
+        the required column is missing.
+
+        When strict mode is disabled, logs a warning and returns a very large
+        effective limit so scheduling can continue.
         """
+        strict = self.config.strict_occultation_time_limits
+        _RELAXED_FALLBACK = timedelta(hours=1_000_000)
+
         if self.occ_catalog is None or self.occ_catalog.empty:
-            raise ValueError(
+            msg = (
                 f"Cannot get time limit for occultation target '{target_name}': "
                 "occultation catalog is not loaded"
             )
+            if strict:
+                raise ValueError(msg)
+            LOGGER.warning("%s — using unlimited fallback", msg)
+            return _RELAXED_FALLBACK
+
         match = self.occ_catalog[self.occ_catalog["Star Name"] == target_name]
         if match.empty:
-            raise ValueError(f"Occultation target '{target_name}' not found in catalog")
+            msg = f"Occultation target '{target_name}' not found in catalog"
+            if strict:
+                raise ValueError(msg)
+            LOGGER.warning("%s — using unlimited fallback", msg)
+            return _RELAXED_FALLBACK
+
         if "Number of Hours Requested" not in match.columns:
-            raise ValueError(
+            msg = (
                 "Occultation catalog is missing required 'Number of Hours Requested' "
                 "column"
             )
+            if strict:
+                raise ValueError(msg)
+            LOGGER.warning("%s — using unlimited fallback", msg)
+            return _RELAXED_FALLBACK
+
         hours_req = match.iloc[0]["Number of Hours Requested"]
         if pd.isna(hours_req):
-            raise ValueError(
+            msg = (
                 f"Occultation target '{target_name}' has missing "
                 "'Number of Hours Requested' value"
             )
+            if strict:
+                raise ValueError(msg)
+            LOGGER.warning("%s — using unlimited fallback", msg)
+            return _RELAXED_FALLBACK
+
         return timedelta(hours=float(hours_req))
 
     def build_calendar(self) -> ET.Element:
@@ -321,6 +349,39 @@ class _ScienceCalendarBuilder:
             visibility_flags,
             visibility_changes,
         )
+
+        if not self.config.enable_occultation_xml:
+            # Occultation XML disabled — emit only the visible segments.
+            seq_counter = 1
+            for change_position, change_idx in enumerate(augmented_changes):
+                if change_position == 0:
+                    segment_start = visit_times[0]
+                else:
+                    segment_start = visit_times[augmented_changes[change_position - 1] + 1]
+                segment_stop = visit_times[change_idx]
+                is_visible = bool(visibility_flags[change_idx])
+                if not is_visible:
+                    continue
+                current = segment_start
+                while current < segment_stop:
+                    next_value = min(current + self.sequence_duration, segment_stop)
+                    priority = _target_priority(
+                        priority_flag, transit_start, transit_stop, current, next_value,
+                    )
+                    observation_sequence(
+                        visit_element,
+                        f"{seq_counter:03d}",
+                        target_name,
+                        priority,
+                        current.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        ra_value,
+                        dec_value,
+                        target_info if target_info is not None else pd.DataFrame(),
+                    )
+                    seq_counter += 1
+                    current = next_value
+            return
 
         occultation_info = self._find_occultation_target(
             oc_starts,
@@ -549,6 +610,7 @@ class _ScienceCalendarBuilder:
                 self.config.prioritise_occultations_by_slew,
                 excluded_targets,
                 show_progress=self.config.show_progress,
+                use_pass1=self.config.enable_occultation_pass1,
             )
             if flag and result_df is not None:
                 return result_df, True
@@ -894,6 +956,7 @@ def _build_occultation_schedule(
     prioritise_by_slew: bool,
     excluded_targets: Optional[set] = None,
     show_progress: bool = False,
+    use_pass1: bool = True,
 ) -> tuple[Optional[pd.DataFrame], bool]:
     if not starts or not stops:
         return None, False
@@ -957,6 +1020,7 @@ def _build_occultation_schedule(
         occ_list,
         label,
         show_progress=show_progress,
+        use_pass1=use_pass1,
     )
     return occ_df, flag
 

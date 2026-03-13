@@ -260,6 +260,36 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only schedule primary science targets; skip non-primary gap filling",
     )
+    parser.add_argument(
+        "--use-target-list-for-occultations",
+        action="store_true",
+        help="Use the target list for occultation scheduling instead of a separate list",
+    )
+    parser.add_argument(
+        "--prioritise-occultations-by-slew",
+        action="store_true",
+        help="Prioritise occultation targets based on slew cost",
+    )
+    parser.add_argument(
+        "--no-break-occultation-sequences",
+        action="store_true",
+        help="Disable splitting long occultation sequences into chunks",
+    )
+    parser.add_argument(
+        "--no-occultation-xml",
+        action="store_true",
+        help="Skip occultation-target calculations during XML generation",
+    )
+    parser.add_argument(
+        "--skip-occultation-pass1",
+        action="store_true",
+        help="Skip Pass 1 in occultation assignment (single target must cover all intervals)",
+    )
+    parser.add_argument(
+        "--relaxed-occultation-time-limits",
+        action="store_true",
+        help="Allow occultation scheduling to continue when time-limit data is incomplete",
+    )
 
     # Profiling configuration
     parser.add_argument(
@@ -569,6 +599,20 @@ def main() -> int:
                     return json_config[key]
             return default
 
+        def _as_bool(value: Any, default: bool = False) -> bool:
+            if value is None:
+                return default
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized == "":
+                    return default
+                return normalized in {"1", "true", "yes", "y", "on"}
+            if isinstance(value, (int, float)):
+                return bool(value)
+            return default
+
         # Default weights if not provided
         transit_scheduling_weights = (0.8, 0.0, 0.2)
 
@@ -733,9 +777,6 @@ def main() -> int:
         obs_sequence_duration_min = int(_get_val("obs_sequence_duration_min", None, 90))
         occ_sequence_limit_min = int(_get_val("occ_sequence_limit_min", None, 50))
         min_sequence_minutes = int(_get_val("min_sequence_minutes", args.min_sequence_minutes, 8))
-        break_occultation_sequences = bool(
-            _get_val("break_occultation_sequences", None, True)
-        )
 
         std_obs_duration_hours = float(_get_val("std_obs_duration_hours", None, 0.5))
         std_obs_frequency_days = float(_get_val("std_obs_frequency_days", None, 3.0))
@@ -744,11 +785,42 @@ def main() -> int:
         primary_only_mode = bool(
             _get_val("primary_only_mode", args.primary_only, False)
         )
-        use_target_list_for_occultations = bool(
-            _get_val("use_target_list_for_occultations", None, False)
+        use_target_list_for_occultations = _as_bool(
+            _get_val("use_target_list_for_occultations", args.use_target_list_for_occultations, False),
+            False,
         )
-        prioritise_occultations_by_slew = bool(
-            _get_val("prioritise_occultations_by_slew", None, False)
+        prioritise_occultations_by_slew = _as_bool(
+            _get_val("prioritise_occultations_by_slew", args.prioritise_occultations_by_slew, False),
+            False,
+        )
+        # CLI --no-break-occultation-sequences inverts the default-True field
+        break_occ_cli = not args.no_break_occultation_sequences if args.no_break_occultation_sequences else None
+        break_occultation_sequences = _as_bool(
+            _get_val("break_occultation_sequences", break_occ_cli, True), True
+        )
+        enable_occultation_xml = _as_bool(
+            _get_any(
+                ["generate_occultation_xml", "enable_occultation_xml"],
+                not args.no_occultation_xml if args.no_occultation_xml else None,
+                True,
+            ),
+            True,
+        )
+        enable_occultation_pass1 = _as_bool(
+            _get_any(
+                ["one_occultation_target", "enable_occultation_pass1"],
+                not args.skip_occultation_pass1 if args.skip_occultation_pass1 else None,
+                True,
+            ),
+            True,
+        )
+        strict_occultation_time_limits = _as_bool(
+            _get_val(
+                "strict_occultation_time_limits",
+                not args.relaxed_occultation_time_limits if args.relaxed_occultation_time_limits else None,
+                True,
+            ),
+            True,
         )
 
         commissioning_days = int(_get_val("commissioning_days", None, 0))
@@ -818,6 +890,9 @@ def main() -> int:
             primary_only_mode=primary_only_mode,
             use_target_list_for_occultations=use_target_list_for_occultations,
             prioritise_occultations_by_slew=prioritise_occultations_by_slew,
+            enable_occultation_xml=enable_occultation_xml,
+            enable_occultation_pass1=enable_occultation_pass1,
+            strict_occultation_time_limits=strict_occultation_time_limits,
             use_legacy_mode=use_legacy_mode,
             parallel_workers=parallel_workers,
             # Sorting / metadata
@@ -843,6 +918,10 @@ def main() -> int:
 
         # 4. Run Scheduler (using new API)
         logger.info("Run data directory: %s", output_dir / data_subdir)
+        logger.info("PRIMARY_ONLY_MODE=%s", str(primary_only_mode).upper())
+        logger.info("GENERATE_OCCULTATION_XML=%s", str(enable_occultation_xml).upper())
+        logger.info("OCCULTATION_PASS1=%s", str(enable_occultation_pass1).upper())
+        logger.info("STRICT_OCCULTATION_TIME_LIMITS=%s", str(strict_occultation_time_limits).upper())
         logger.info("Starting scheduler pipeline...")
         if args.legacy_mode:
             logger.info("Legacy mode enabled - using MJD-based visibility filtering")

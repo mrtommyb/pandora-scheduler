@@ -241,6 +241,7 @@ def schedule_occultation_targets(
     o_list,
     try_occ_targets: str,
     show_progress: bool = False,
+    use_pass1: bool = True,
 ):
     starts_array = np.asarray(starts, dtype=float)
     stops_array = np.asarray(stops, dtype=float)
@@ -271,8 +272,6 @@ def schedule_occultation_targets(
 
     base_path = Path(path) if path is not None else None
 
-    base_path = Path(path) if path is not None else None
-
     # Cache visibility data to avoid re-reading files in the second pass
     # Key: v_name, Value: (vis_times, visibility)
     visibility_cache: Dict[str, tuple[np.ndarray, np.ndarray]] = {}
@@ -294,12 +293,17 @@ def schedule_occultation_targets(
         return data
 
     # PASS 1: Search for a single target that covers ALL intervals
-    for v_name in tqdm(v_names, desc=f"{description} (Pass 1)", leave=False, disable=not show_progress):
+    if not use_pass1:
+        LOGGER.info("Pass 1 skipped (enable_occultation_pass1=False)")
+    for v_name in tqdm(v_names, desc=f"{description} (Pass 1)", leave=False, disable=not show_progress or not use_pass1):
         vis_data = _get_visibility(v_name)
         if vis_data is None:
             continue
 
         vis_times, visibility = vis_data
+
+        if not use_pass1:
+            break
 
         # Check if visible for ALL intervals individually (less strict)
         all_visible = True
@@ -325,6 +329,15 @@ def schedule_occultation_targets(
                 o_df.loc[idx, "Visibility"] = 1
 
         return o_df, True
+
+    # Pass 1 summary
+    assigned_after_p1 = int(schedule["Target"].notna().sum())
+    total_intervals = len(starts_array)
+    LOGGER.debug(
+        "Occultation Pass 1: %d/%d intervals assigned",
+        assigned_after_p1,
+        total_intervals,
+    )
 
     # PASS 2: Fill gaps with multiple targets (Greedy approach)
     for v_name in tqdm(v_names, desc=f"{description} (Pass 2)", leave=False, disable=not show_progress):
@@ -361,6 +374,15 @@ def schedule_occultation_targets(
 
     if not schedule["Target"].isna().any():
         return o_df, True
+
+    # Pass 2 summary
+    assigned_after_p2 = int(schedule["Target"].notna().sum())
+    LOGGER.debug(
+        "Occultation Pass 2: %d/%d intervals assigned (%d remaining)",
+        assigned_after_p2,
+        total_intervals,
+        total_intervals - assigned_after_p2,
+    )
 
     # PASS 3: Best-effort assignment for intervals not fully covered by any
     # single occultation target. For each remaining interval, choose the
@@ -402,6 +424,13 @@ def schedule_occultation_targets(
 
     # If PASS 3 produced any assignments into o_df, treat this as a valid
     # partial schedule and return it.
+    assigned_after_p3 = int(schedule["Target"].notna().sum())
+    LOGGER.debug(
+        "Occultation Pass 3: %d/%d intervals assigned (%d remaining)",
+        assigned_after_p3,
+        total_intervals,
+        total_intervals - assigned_after_p3,
+    )
     if "Target" in o_df.columns and o_df["Target"].notna().any():
         return o_df, True
 
@@ -410,6 +439,7 @@ def schedule_occultation_targets(
     # candidate that covers the longest run. Build a new occ_df with one row
     # per assigned segment and return it if any assignments were made.
     result_rows: list[dict] = []
+    uncovered_minutes = 0
     minute_scale = 1440.0
     for idx, (start, stop) in enumerate(zip(starts_array, stops_array)):
         if not pd.isna(schedule.loc[start, "Target"]):
@@ -441,10 +471,12 @@ def schedule_occultation_targets(
             )
 
         i = 0
+        interval_uncovered = 0
         while i < minutes_idx.size:
             # Find candidates that cover this minute
             available = [name for name, arr in candidate_coverages.items() if arr[i]]
             if not available:
+                interval_uncovered += 1
                 i += 1
                 continue
 
@@ -508,9 +540,22 @@ def schedule_occultation_targets(
 
             i += best_len
 
+        uncovered_minutes += interval_uncovered
+
     if result_rows:
+        LOGGER.debug(
+            "Occultation Pass 4: produced %d minute-resolution segments",
+            len(result_rows),
+        )
+        if uncovered_minutes > 0:
+            LOGGER.warning(
+                "Occultation Pass 4: %d uncovered minute(s) detected across intervals",
+                uncovered_minutes,
+            )
         result_df = pd.DataFrame(result_rows)
         return result_df, True
+
+    LOGGER.debug("Occultation Pass 4: no segments assigned — all intervals uncovered")
 
     mask = schedule["Target"].isna()
     schedule.loc[mask, "Target"] = "No target"

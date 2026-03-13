@@ -199,6 +199,15 @@ class PandoraSchedulerConfig:
     prioritise_occultations_by_slew: bool = False
     """Prioritize occultation targets by slew angle."""
 
+    enable_occultation_xml: bool = True
+    """Enable occultation-target calculations during XML generation."""
+
+    enable_occultation_pass1: bool = True
+    """Enable Pass 1 in occultation assignment (single target covers all intervals)."""
+
+    strict_occultation_time_limits: bool = True
+    """When true, never schedule occultation targets beyond requested-hour limits."""
+
     # ============================================================================
     # PARALLELISM
     # ============================================================================

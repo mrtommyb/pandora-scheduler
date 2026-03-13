@@ -17,6 +17,9 @@ from astropy.coordinates import EarthLocation, SkyCoord
 from astropy.time import Time
 from tqdm import tqdm
 
+import pyarrow as pa
+import pyarrow.parquet as pq
+
 from pandorascheduler_rework.config import PandoraSchedulerConfig, resolve_data_subdir
 from pandorascheduler_rework.utils.io import read_csv_cached, read_parquet_cached
 
@@ -35,6 +38,32 @@ from .geometry import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _write_visibility_parquet(
+    df: pd.DataFrame,
+    path_or_buf: Path | io.BytesIO,
+    config: PandoraSchedulerConfig,
+) -> None:
+    """Write *df* to parquet with keepout-angle metadata in the schema."""
+    table = pa.Table.from_pandas(df, preserve_index=False)
+    existing = table.schema.metadata or {}
+    existing.update(
+        {
+            b"pandora.visibility_sun_deg": str(config.sun_avoidance_deg).encode(),
+            b"pandora.visibility_moon_deg": str(config.moon_avoidance_deg).encode(),
+            b"pandora.visibility_earth_deg": str(config.earth_avoidance_deg).encode(),
+        }
+    )
+    table = table.replace_schema_metadata(existing)
+    pq.write_table(
+        table,
+        path_or_buf,
+        compression="snappy",
+        write_statistics=False,
+        use_dictionary=False,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Worker state for multiprocessing (set once per worker via _init_worker)
@@ -68,14 +97,7 @@ def _worker_build_star(
     if not is_exoplanet:
         df["Time(MJD_UTC)"] = np.round(df["Time(MJD_UTC)"], 6)
     buf = io.BytesIO()
-    df.to_parquet(
-        buf,
-        index=False,
-        engine="pyarrow",
-        compression="snappy",
-        write_statistics=False,
-        use_dictionary=False,
-    )
+    _write_visibility_parquet(df, buf, _worker_config)
     return star_name, buf.getvalue()
 
 
@@ -203,14 +225,7 @@ def build_visibility_catalog(
                         visibility_df["Time(MJD_UTC)"], 6
                     )
 
-                visibility_df.to_parquet(
-                    output_path,
-                    index=False,
-                    engine="pyarrow",
-                    compression="snappy",
-                    write_statistics=False,
-                    use_dictionary=False,
-                )
+                _write_visibility_parquet(visibility_df, output_path, config)
     else:
         # Still need star_metadata for planet transits
         star_metadata = _build_star_metadata(target_manifest)
@@ -238,7 +253,7 @@ def build_visibility_catalog(
             )
         )
 
-    _apply_transit_overlaps(generated_planets, output_root)
+    _apply_transit_overlaps(generated_planets, output_root, config)
 
 
 def _load_target_manifest(
@@ -475,14 +490,7 @@ def _build_planet_transits(
             star_metadata,
             observer_location,
         )
-        planet_df.to_parquet(
-            planet_output,
-            index=False,
-            engine="pyarrow",
-            compression="snappy",
-            write_statistics=False,
-            use_dictionary=False,
-        )
+        _write_visibility_parquet(planet_df, planet_output, config)
         if not planet_df.empty:
             generated.append((star_name, planet_name))
 
@@ -667,6 +675,7 @@ def _compute_planet_transits(
 def _apply_transit_overlaps(
     generated_planets: Iterable[tuple[str, str]],
     output_root: Path,
+    config: PandoraSchedulerConfig | None = None,
 ) -> None:
     star_planets: dict[str, list[str]] = {}
     for star_name, planet_name in generated_planets:
@@ -788,11 +797,14 @@ def _apply_transit_overlaps(
             planet_path = (
                 output_root / star_name / planet / f"Visibility for {planet}.parquet"
             )
-            df.to_parquet(
-                planet_path,
-                index=False,
-                engine="pyarrow",
-                compression="snappy",
-                write_statistics=False,
-                use_dictionary=False,
-            )
+            if config is not None:
+                _write_visibility_parquet(df, planet_path, config)
+            else:
+                df.to_parquet(
+                    planet_path,
+                    index=False,
+                    engine="pyarrow",
+                    compression="snappy",
+                    write_statistics=False,
+                    use_dictionary=False,
+                )
