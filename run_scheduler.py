@@ -207,6 +207,12 @@ def parse_args() -> argparse.Namespace:
         default=0.7,
         help="Minimum solar power fraction to accept a roll angle (default: 0.7)",
     )
+    parser.add_argument(
+        "--min-sequence-minutes",
+        type=int,
+        default=None,
+        help="Minimum contiguous sequence duration in minutes (default: 8)",
+    )
 
     # Scheduling configuration
     parser.add_argument(
@@ -706,7 +712,7 @@ def main() -> int:
 
         obs_sequence_duration_min = int(_get_val("obs_sequence_duration_min", None, 90))
         occ_sequence_limit_min = int(_get_val("occ_sequence_limit_min", None, 50))
-        min_sequence_minutes = int(_get_val("min_sequence_minutes", None, 5))
+        min_sequence_minutes = int(_get_val("min_sequence_minutes", args.min_sequence_minutes, 8))
         break_occultation_sequences = bool(
             _get_val("break_occultation_sequences", None, True)
         )
