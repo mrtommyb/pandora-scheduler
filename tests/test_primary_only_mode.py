@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import importlib.util
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 
-import run_scheduler as scheduler_driver
 from pandorascheduler_rework.config import PandoraSchedulerConfig
 from pandorascheduler_rework.pipeline import SchedulerResult
 from pandorascheduler_rework.scheduler import (
@@ -12,6 +13,19 @@ from pandorascheduler_rework.scheduler import (
     SchedulerPaths,
     run_scheduler,
 )
+
+
+def _load_run_scheduler_module():
+    module_path = Path(__file__).resolve().parents[1] / "run_scheduler.py"
+    spec = importlib.util.spec_from_file_location("run_scheduler", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to load run_scheduler module from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+scheduler_driver = _load_run_scheduler_module()
 
 
 def test_run_scheduler_uses_free_time_when_primary_only_and_no_primary_targets(tmp_path):

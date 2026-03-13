@@ -36,6 +36,7 @@ def mock_config(tmp_path):
         gmat_ephemeris=tmp_path / "gmat.csv",
         targets_manifest=tmp_path / "targets.csv",
         output_dir=tmp_path / "output",
+        extra_inputs={"data_subdir": "data"},
         force_regenerate=True,
         sun_avoidance_deg=45.0,
         moon_avoidance_deg=30.0,

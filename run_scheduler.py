@@ -432,7 +432,11 @@ def print_summary(result: SchedulerResult, xml_path: Optional[Path]) -> None:
                         f"  Schedule span:             {_fmt_hours(total_span_hours)}"
                     )
 
-                if primary_hours is not None:
+                if (
+                    primary_hours is not None
+                    and std_hours is not None
+                    and free_hours is not None
+                ):
                     used_hours = primary_hours + std_hours
                     print(f"  Primary time:              {_fmt_hours(primary_hours)}")
                     print(f"  STD time:                  {_fmt_hours(std_hours)}")
