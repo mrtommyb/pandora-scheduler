@@ -449,6 +449,18 @@ def _plot_simple_geometry(
         ax = axes[idx]
         U, V, mask = _panel_mask(i, j, sc_hat, sc_u, sun_hat, target_hat, thr)
         ax.contourf(U, V, np.where(mask, 1.0, np.nan), levels=[0.5, 1.5], colors=["#9fd8ff"], alpha=0.55, zorder=1)
+        if show_dayside_visible_outline:
+            U_dv, V_dv, mask_dv = _dayside_visible_mask(i, j, sc_hat, thr, sun_hat)
+            ax.contour(
+                U_dv,
+                V_dv,
+                mask_dv.astype(float),
+                levels=[0.5],
+                colors=["#1f77b4"],
+                linewidths=1.5,
+                linestyles=":",
+                zorder=2,
+            )
         ax.add_patch(plt.Circle((0.0, 0.0), 1.0, fill=False, color="gray", linewidth=1.5, zorder=3))
 
         if show_earth_frame:
@@ -575,6 +587,8 @@ def _plot_simple_geometry(
         axes[0].plot([], [], marker="o", color="#006400", linestyle="None", label="nearest limb point L")
     if show_moon_arrow:
         axes[0].plot([], [], color="#7f8c8d", linewidth=2.0, label="to Moon")
+    if show_dayside_visible_outline:
+        axes[0].plot([], [], color="#1f77b4", linewidth=1.5, linestyle=":", label="dayside visible")
     axes[0].legend(loc="lower left", fontsize=14)
 
     fig.suptitle(
