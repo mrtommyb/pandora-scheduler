@@ -25,7 +25,7 @@
   "# Behavior flags": null,
   "force_regenerate": false,
   "use_legacy_mode": false,
-  "primary_only_mode": true,
+  "primary_only_mode": false,
 
   "# Occultation XML controls: generate_occultation_xml toggles occultation filling in XML; one_occultation_target toggles Pass 1 (single target must cover all intervals).": null,
   "generate_occultation_xml": true,

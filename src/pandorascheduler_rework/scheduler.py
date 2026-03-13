@@ -1454,6 +1454,11 @@ def _primary_transit_comment(target_list: pd.DataFrame, planet_name: str) -> str
     if pd.isna(value):
         return "secondary exoplanet transits"
 
+    # NOTE:
+    # The legacy scheduler (via exoplanet_priorities.csv / transits_req) treated
+    # planets with exactly 10 requested transits as "primary" and all other counts
+    # as "secondary". We intentionally preserve that behaviour here instead of
+    # using a >= threshold so that re-runs reproduce historical schedules.
     PRIMARY_TRANSIT_COUNT_THRESHOLD = 10
     return (
         "primary exoplanet transits"
