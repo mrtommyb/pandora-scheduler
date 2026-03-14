@@ -138,10 +138,13 @@ def build_visibility_catalog(
                 n_stars,
                 n_workers,
             )
-            # Use "forkserver" to avoid macOS fork-safety warnings with
-            # multi-threaded processes while still sharing base_payload
-            # efficiently via the initializer (pickled once per worker).
-            ctx = multiprocessing.get_context("forkserver")
+            available_methods = multiprocessing.get_all_start_methods()
+            start_method = (
+                "forkserver" if "forkserver" in available_methods else "spawn"
+            )
+            # Prefer forkserver where available to avoid macOS fork-safety
+            # warnings; otherwise fall back to spawn for portability.
+            ctx = multiprocessing.get_context(start_method)
             with concurrent.futures.ProcessPoolExecutor(
                 max_workers=n_workers,
                 mp_context=ctx,
@@ -337,7 +340,6 @@ def _build_star_visibility(
         nadir_unit=payload["nadir_unit"],
         sun_unit=payload["sun_unit"],
         moon_unit=payload["moon_unit"],
-        observer_dist_km=payload["observer_dist_km"],
         zenith_unit=payload["zenith_unit"],
         limb_angle_rad=payload["limb_angle_rad"],
         orbit_slices=payload["orbit_slices"],

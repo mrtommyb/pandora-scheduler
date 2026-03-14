@@ -20,7 +20,12 @@ black = "^24.1.0"
 flake8 = "^7.0.0"
 pytest = "^8.2.0"
 ruff = "^0.14.7"
-pandoravisibility = {path = "../pandora-visibility", develop = true}
+
+[tool.poetry.group.crossval]
+optional = true
+
+[tool.poetry.group.crossval.dependencies]
+pandoravisibility = { git = "https://github.com/PandoraMission/pandora-visibility.git" }
 
 [tool.pytest.ini_options]
 filterwarnings = [

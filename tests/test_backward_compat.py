@@ -185,16 +185,7 @@ def test_fast_sep_matches_skycoord_separation(tmp_path):
 
 
 def test_comparison_operator_gte_vs_gt():
-    """Document the >= vs > difference and verify it only matters at exact threshold."""
-    # This test documents that the new code uses >= while the old used >.
-    # At exactly the threshold, old returns False, new returns True.
-    # This only affects the boundary case (floating-point equality), which
-    # is effectively never hit with real angular separations.
-    old_result = 91.0 > 91.0   # False
-    new_result = 91.0 >= 91.0  # True
-    assert old_result is False
-    assert new_result is True
-
-    # But for any value slightly above or below, they agree:
-    assert (91.001 > 91.0) == (91.001 >= 91.0) == True
-    assert (90.999 > 91.0) == (90.999 >= 91.0) == False
+    """Visibility thresholds are strict: equal-to-threshold should fail."""
+    threshold = 91.0
+    assert not (np.array([threshold]) > threshold)[0]
+    assert (np.array([threshold + 1e-6]) > threshold)[0]

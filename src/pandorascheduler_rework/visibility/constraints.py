@@ -543,7 +543,6 @@ def compute_visibility_with_constraints(
     nadir_unit: np.ndarray,
     sun_unit: np.ndarray,
     moon_unit: np.ndarray,
-    observer_dist_km: np.ndarray,
     zenith_unit: np.ndarray,
     limb_angle_rad: np.ndarray,
     orbit_slices: list[slice],
@@ -559,7 +558,6 @@ def compute_visibility_with_constraints(
     ----------
     target_unit : ndarray ``(N, 3)``
     nadir_unit, sun_unit, moon_unit, zenith_unit : ndarray ``(N, 3)``
-    observer_dist_km : ndarray ``(N,)``
     limb_angle_rad : ndarray ``(N,)``
     orbit_slices : list of slice
     earth_center_sep_deg : ndarray ``(N,)``
@@ -601,7 +599,7 @@ def compute_visibility_with_constraints(
     n_st_pass = np.zeros(N, dtype=int)
 
     if _st_thresholds_active(config):
-        roll_deg, st_visible, power_frac = find_best_roll_per_orbit(
+        roll_deg, st_visible, _power_frac = find_best_roll_per_orbit(
             target_unit,
             zenith_unit,
             sun_unit,
@@ -613,9 +611,52 @@ def compute_visibility_with_constraints(
         )
         visible = boresight_visible & st_visible
 
-        # Count passing trackers at the chosen roll (for diagnostics)
-        # We'd need to re-evaluate, but for now set 1 where st_visible
-        n_st_pass = st_visible.astype(int)
+        # Count passing trackers (0/1/2) at the chosen roll for diagnostics.
+        st1_el = (
+            config.st1_earthlimb_min_deg
+            if config.st1_earthlimb_min_deg is not None
+            else config.st_earthlimb_min_deg
+        )
+        st2_el = (
+            config.st2_earthlimb_min_deg
+            if config.st2_earthlimb_min_deg is not None
+            else config.st_earthlimb_min_deg
+        )
+        for orb_slice in orbit_slices:
+            roll_slice = roll_deg[orb_slice]
+            finite_roll = np.isfinite(roll_slice)
+            if not np.any(finite_roll):
+                continue
+
+            chosen_roll_deg = float(roll_slice[finite_roll][0])
+            x_pay, y_pay, z_pay = fixed_roll_attitude(
+                target_unit[orb_slice], np.deg2rad(chosen_roll_deg)
+            )
+
+            st1_eci = star_tracker_eci(x_pay, y_pay, z_pay, ST1_BODY)
+            st2_eci = star_tracker_eci(x_pay, y_pay, z_pay, ST2_BODY)
+            st1_ok = evaluate_star_tracker(
+                st1_eci,
+                sun_unit[orb_slice],
+                moon_unit[orb_slice],
+                zenith_unit[orb_slice],
+                limb_angle_rad[orb_slice],
+                config.st_sun_min_deg,
+                config.st_moon_min_deg,
+                st1_el,
+            )
+            st2_ok = evaluate_star_tracker(
+                st2_eci,
+                sun_unit[orb_slice],
+                moon_unit[orb_slice],
+                zenith_unit[orb_slice],
+                limb_angle_rad[orb_slice],
+                config.st_sun_min_deg,
+                config.st_moon_min_deg,
+                st2_el,
+            )
+            st_count = st1_ok.astype(int) + st2_ok.astype(int)
+            n_st_pass[orb_slice] = np.where(visible[orb_slice], st_count, 0)
     else:
         visible = boresight_visible
 

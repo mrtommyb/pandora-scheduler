@@ -17,7 +17,8 @@ from astropy.coordinates import GCRS, SkyCoord
 from astropy.time import Time
 
 import astropy.units as u
-from pandoravisibility import Visibility
+
+Visibility = pytest.importorskip("pandoravisibility").Visibility
 
 from pandorascheduler_rework.visibility.constraints import (
     ST1_BODY,

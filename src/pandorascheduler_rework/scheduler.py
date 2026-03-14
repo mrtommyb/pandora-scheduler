@@ -830,21 +830,35 @@ def _schedule_auxiliary_target(
     active_start = start
     scheduled_rows: list[list] = []
     row_columns = ["Target", "Observation Start", "Observation Stop", "RA", "DEC"]
+    std_visible_duration_by_target: dict[str, timedelta] = {}
+
+    def _accumulate_observation_time(result_df: pd.DataFrame) -> None:
+        for record in result_df.to_dict(orient="records"):
+            target_label = str(record["Target"])
+            if target_label == "Free Time":
+                continue
+
+            duration = record["Observation Stop"] - record["Observation Start"]
+            if isinstance(duration, pd.Timedelta):
+                duration = duration.to_pytimedelta()
+
+            if target_label.endswith(" STD") and target_label in std_visible_duration_by_target:
+                duration = std_visible_duration_by_target[target_label]
+
+            state.all_target_obs_time[target_label] = (
+                state.all_target_obs_time.get(target_label, timedelta()) + duration
+            )
 
     obs_std_duration = timedelta(hours=config.std_obs_duration_hours)
     if (
         active_start - state.last_std_obs
         > timedelta(days=config.std_obs_frequency_days)
-        and (stop - active_start).total_seconds() / 60.0 > config.min_sequence_minutes
     ):
-        std_path = inputs.paths.data_dir / "monitoring-standard_targets.csv"
-        std_df = read_csv_cached(str(std_path))
-        if std_df is not None:
-            std_df = std_df.sort_values("Priority", ascending=False, ignore_index=True)
-            std_records = std_df.to_dict(orient="records")
-        else:
-            std_records = []
 
+            std_visible_duration_by_target[std_label] = (
+                std_visible_duration_by_target.get(std_label, timedelta())
+                + best_duration
+            )
         # Pre-load visibility DataFrames for all standard stars so they can
         # be re-used when we slide the search window.
         std_vis_cache: list[tuple[dict, pd.DataFrame]] = []
@@ -982,8 +996,17 @@ def _schedule_auxiliary_target(
             else:
                 std_row_end = std_visible_end
 
+            std_label = f"{std_name} STD"
             scheduled_rows.append(
+<<<<<<< HEAD
                 [f"{std_name} STD", active_start, std_row_end, std_ra, std_dec]
+=======
+                [std_label, active_start, std_row_end, std_ra, std_dec, ""]
+            )
+            std_visible_duration_by_target[std_label] = (
+                std_visible_duration_by_target.get(std_label, timedelta())
+                + best_duration
+>>>>>>> df013d5 (Address PR7 Copilot review feedback)
             )
             active_start = std_row_end
             state.last_std_obs = active_start
@@ -1010,16 +1033,7 @@ def _schedule_auxiliary_target(
     if remaining_minutes <= 0:
         # Gap fully consumed (e.g. extended STD) — nothing more to schedule
         result = pd.DataFrame(scheduled_rows, columns=row_columns)
-        for record in result.to_dict(orient="records"):
-            target_label = str(record["Target"])
-            if target_label == "Free Time":
-                continue
-            duration = record["Observation Stop"] - record["Observation Start"]
-            if isinstance(duration, pd.Timedelta):
-                duration = duration.to_pytimedelta()
-            state.all_target_obs_time[target_label] = (
-                state.all_target_obs_time.get(target_label, timedelta()) + duration
-            )
+        _accumulate_observation_time(result)
         return result, "Gap fully scheduled by STD observation."
     if remaining_minutes <= config.min_sequence_minutes:
         logger.info(
@@ -1034,16 +1048,7 @@ def _schedule_auxiliary_target(
             ["Free Time", active_start, stop, float("nan"), float("nan")]
         )
         result = pd.DataFrame(scheduled_rows, columns=row_columns)
-        for record in result.to_dict(orient="records"):
-            target_label = str(record["Target"])
-            if target_label == "Free Time":
-                continue
-            duration = record["Observation Stop"] - record["Observation Start"]
-            if isinstance(duration, pd.Timedelta):
-                duration = duration.to_pytimedelta()
-            state.all_target_obs_time[target_label] = (
-                state.all_target_obs_time.get(target_label, timedelta()) + duration
-            )
+        _accumulate_observation_time(result)
         return result, "Free time after STD, remaining window too short."
 
     if config.aux_sort_key is None:
@@ -1051,16 +1056,7 @@ def _schedule_auxiliary_target(
             ["Free Time", active_start, stop, float("nan"), float("nan")]
         )
         result = pd.DataFrame(scheduled_rows, columns=row_columns)
-        for record in result.to_dict(orient="records"):
-            target_label = str(record["Target"])
-            if target_label == "Free Time":
-                continue
-            duration = record["Observation Stop"] - record["Observation Start"]
-            if isinstance(duration, pd.Timedelta):
-                duration = duration.to_pytimedelta()
-            state.all_target_obs_time[target_label] = (
-                state.all_target_obs_time.get(target_label, timedelta()) + duration
-            )
+        _accumulate_observation_time(result)
         return result, "Free time, no observation scheduled."
 
     selected_row: Optional[list] = None
@@ -1297,17 +1293,7 @@ def _schedule_auxiliary_target(
             )
 
     result = pd.DataFrame(scheduled_rows, columns=row_columns)
-    # Update all_target_obs_time
-    for record in result.to_dict(orient="records"):
-        target_label = str(record["Target"])
-        if target_label == "Free Time":
-            continue
-        duration = record["Observation Stop"] - record["Observation Start"]
-        if isinstance(duration, pd.Timedelta):
-            duration = duration.to_pytimedelta()
-        state.all_target_obs_time[target_label] = (
-            state.all_target_obs_time.get(target_label, timedelta()) + duration
-        )
+    _accumulate_observation_time(result)
 
     return result, log_info
 

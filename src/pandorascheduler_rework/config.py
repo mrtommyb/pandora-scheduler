@@ -292,3 +292,62 @@ class PandoraSchedulerConfig:
                 "min_power_frac must be in [0, 1], got %s"
                 % (self.min_power_frac,)
             )
+
+        # Validate parallel worker count
+        if self.parallel_workers < 0:
+            raise ValueError(
+                "parallel_workers must be >= 0, got %s"
+                % (self.parallel_workers,)
+            )
+
+        # Validate parallel worker count
+        if self.parallel_workers < 0:
+            raise ValueError(
+                "parallel_workers must be >= 0, got %s"
+                % (self.parallel_workers,)
+            )
+
+
+def build_default_data_subdir(
+    sun_avoidance_deg: float,
+    moon_avoidance_deg: float,
+    earth_avoidance_deg: float,
+) -> str:
+    """Build the default run data directory name from keepout angles."""
+
+    return (
+        f"data_{int(float(sun_avoidance_deg))}_"
+        f"{int(float(moon_avoidance_deg))}_"
+        f"{int(float(earth_avoidance_deg))}"
+    )
+
+
+def resolve_data_subdir(
+    extra_inputs: Mapping[str, object] | None,
+    *,
+    sun_avoidance_deg: float,
+    moon_avoidance_deg: float,
+    earth_avoidance_deg: float,
+) -> str:
+    """Resolve the run data directory name.
+
+    When ``extra_inputs.data_subdir`` is not provided, derive the directory name
+    from the keepout angles so multiple runs under one output root can coexist.
+    """
+
+    raw_value = None if extra_inputs is None else extra_inputs.get("data_subdir")
+    if raw_value is None or str(raw_value).strip() == "":
+        return build_default_data_subdir(
+            sun_avoidance_deg,
+            moon_avoidance_deg,
+            earth_avoidance_deg,
+        )
+
+    candidate = str(raw_value).strip()
+    path_candidate = Path(candidate)
+    if path_candidate.is_absolute():
+        raise ValueError("extra_inputs.data_subdir must be a relative directory name")
+    if path_candidate.name != candidate:
+        raise ValueError(
+            "extra_inputs.data_subdir must not include path separators"
+        )

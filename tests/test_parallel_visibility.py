@@ -162,3 +162,13 @@ def test_parallel_workers_config_set():
         parallel_workers=4,
     )
     assert cfg.parallel_workers == 4
+
+
+def test_parallel_workers_config_rejects_negative():
+    """parallel_workers must be non-negative."""
+    with pytest.raises(ValueError, match="parallel_workers"):
+        PandoraSchedulerConfig(
+            window_start=datetime(2025, 1, 1),
+            window_end=datetime(2025, 1, 2),
+            parallel_workers=-1,
+        )
