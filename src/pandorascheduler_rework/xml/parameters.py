@@ -229,12 +229,22 @@ def populate_vda_parameters(
                     warned.add(column_name)
                 continue
 
+            try:
+                target_ra = float(row.get("RA"))
+                target_dec = float(row.get("DEC"))
+            except (TypeError, ValueError):
+                target_ra, target_dec = None, None
+
             coordinates = np.atleast_2d(coordinates).astype(float, copy=False)
-            target_ra = row.get("RA")
-            target_dec = row.get("DEC")
-            if coordinates.size and pd.notna(target_ra) and pd.notna(target_dec):
-                coordinates[0, 0] = float(target_ra)
-                coordinates[0, 1] = float(target_dec)
+            if (
+                coordinates.ndim == 2
+                and coordinates.shape[1] >= 2
+                and target_ra is not None
+                and target_dec is not None
+            ):
+                coordinates = coordinates.copy()
+                coordinates[0, 0] = target_ra
+                coordinates[0, 1] = target_dec
 
             element = ET.SubElement(vda_element, shortened_key)
             for index, coordinate in enumerate(coordinates):

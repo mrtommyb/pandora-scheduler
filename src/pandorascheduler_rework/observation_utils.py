@@ -377,6 +377,13 @@ def schedule_occultation_targets(
             if pd.isna(schedule.loc[start, "Target"]):
                 interval_mask = (vis_times >= start) & (vis_times <= stop)
 
+                # Guard: empty mask means no visibility data for this interval.
+                if interval_mask.sum() == 0:
+                    if pd.isna(schedule.loc[start, "Visibility"]):
+                        schedule.loc[start, "Visibility"] = 0
+                        o_df.loc[idx, "Visibility"] = 0
+                    continue
+
                 if np.all(visibility[interval_mask] == 1):
                     schedule.loc[start, "Target"] = v_name
                     schedule.loc[start, "Visibility"] = 1
