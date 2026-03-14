@@ -358,7 +358,7 @@ class _ScienceCalendarBuilder:
                     segment_start = visit_times[0]
                 else:
                     segment_start = visit_times[augmented_changes[change_position - 1] + 1]
-                segment_stop = visit_times[change_idx]
+                segment_stop = visit_times[change_idx + 1]
                 is_visible = bool(visibility_flags[change_idx])
                 if not is_visible:
                     continue
@@ -408,7 +408,7 @@ class _ScienceCalendarBuilder:
                     segment_start = visit_times[0]
                 else:
                     segment_start = visit_times[augmented_changes[change_position - 1] + 1]
-                segment_stop = visit_times[change_idx]
+                segment_stop = visit_times[change_idx + 1]
                 is_visible = bool(visibility_flags[change_idx])
                 if is_visible:
                     current = segment_start
@@ -482,7 +482,7 @@ class _ScienceCalendarBuilder:
                     segment_start = visit_times[0]
                 else:
                     segment_start = visit_times[augmented_changes[change_position - 1] + 1]
-                segment_stop = visit_times[change_idx]
+                segment_stop = visit_times[change_idx + 1]
                 is_visible = bool(visibility_flags[change_idx])
                 if is_visible:
                     current = segment_start
@@ -545,7 +545,7 @@ class _ScienceCalendarBuilder:
             else:
                 segment_start = visit_times[augmented_changes[change_position - 1] + 1]
 
-            segment_stop = visit_times[change_idx]
+            segment_stop = visit_times[change_idx + 1]
             is_visible = bool(visibility_flags[change_idx])
 
             if is_visible:

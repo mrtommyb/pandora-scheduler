@@ -599,3 +599,108 @@ def test_datetime_rounding_to_nearest_second(tmp_path, monkeypatch):
     # so we check that the raw values are preserved in Valid_From and Expires
     assert "2026-01-01 12:30:45.750000" in xml_text, "Valid_From should preserve microseconds from schedule"
     assert "2026-01-01 13:30:15.250000" in xml_text, "Expires should preserve microseconds from schedule"
+
+
+def test_observation_sequences_are_contiguous(tmp_path):
+    """Observation_Sequences within a Visit must have zero gaps between them.
+
+    Regression test: previously, segment_stop used visit_times[change_idx]
+    instead of visit_times[change_idx + 1], creating a 1-minute hole at
+    every visibility transition boundary.
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    start = datetime(2026, 1, 1, 0, 0, 0)
+    # 180 minutes: visible 0-59, occultation 60-119, visible 120-179
+    times = [start + timedelta(minutes=m) for m in range(180)]
+    primary_flags = [1] * 60 + [0] * 60 + [1] * 60
+
+    _write_visibility(
+        data_dir / "targets" / "StarA", "StarA", times, primary_flags
+    )
+    _write_planet_visibility(
+        data_dir / "targets" / "StarA" / "StarA b",
+        "StarA b",
+        start + timedelta(minutes=30),
+        start + timedelta(minutes=90),
+    )
+    _write_visibility(
+        data_dir / "aux_targets" / "OccTarget", "OccTarget", times, [1] * len(times)
+    )
+
+    pd.DataFrame(
+        [{"Planet Name": "StarA b", "Star Name": "StarA", "RA": 10.0, "DEC": -20.0}]
+    ).to_csv(data_dir / "exoplanet_targets.csv", index=False)
+    pd.DataFrame(
+        [{"Star Name": "OccTarget", "RA": 30.0, "DEC": 15.0}]
+    ).to_csv(data_dir / "all_targets.csv", index=False)
+    pd.DataFrame(
+        [{"Star Name": "OccTarget", "RA": 30.0, "DEC": 10.0, "Number of Hours Requested": 600}]
+    ).to_csv(data_dir / "occultation-standard_targets.csv", index=False)
+
+    schedule_df = pd.DataFrame(
+        [
+            {
+                "Target": "StarA b",
+                "Observation Start": "2026-01-01 00:00:00",
+                "Observation Stop": "2026-01-01 03:00:00",
+                "Transit Coverage": 0.75,
+                "SAA Overlap": 0.1,
+                "Schedule Factor": 0.9,
+                "Quality Factor": 0.85,
+                "Comments": "",
+            }
+        ]
+    )
+    schedule_path = tmp_path / "schedule.csv"
+    schedule_df.to_csv(schedule_path, index=False)
+
+    inputs = science_calendar.ScienceCalendarInputs(
+        schedule_csv=schedule_path, data_dir=data_dir
+    )
+    config = PandoraSchedulerConfig(
+        window_start=start,
+        window_end=start + timedelta(days=1),
+        visit_limit=1,
+        prioritise_occultations_by_slew=True,
+    )
+    output_path = tmp_path / "calendar.xml"
+
+    science_calendar.generate_science_calendar(
+        inputs, output_path=output_path, config=config
+    )
+
+    xml_text = output_path.read_text(encoding="utf-8")
+    root = ET.fromstring(xml_text)
+    ns = ""
+    if root.tag.startswith("{"):
+        ns = root.tag.split("}", 1)[0].strip("{")
+
+    def q(tag: str) -> str:
+        return f"{{{ns}}}{tag}" if ns else tag
+
+    visits = root.findall(f".//{q('Visit')}")
+    assert len(visits) >= 1
+
+    for visit in visits:
+        seqs = visit.findall(f"{q('Observation_Sequence')}")
+        if len(seqs) < 2:
+            continue
+        prev_stop = None
+        for seq in seqs:
+            timing = seq.find(
+                f"{q('Observational_Parameters')}/{q('Timing')}"
+            )
+            assert timing is not None
+            start_text = timing.find(q("Start")).text.strip().rstrip("Z")
+            stop_text = timing.find(q("Stop")).text.strip().rstrip("Z")
+            seq_start = datetime.fromisoformat(start_text)
+            seq_stop = datetime.fromisoformat(stop_text)
+            if prev_stop is not None:
+                gap_seconds = (seq_start - prev_stop).total_seconds()
+                assert gap_seconds == 0, (
+                    f"Gap of {gap_seconds}s between sequences: "
+                    f"prev_stop={prev_stop}, next_start={seq_start}"
+                )
+            prev_stop = seq_stop
