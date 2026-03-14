@@ -60,6 +60,13 @@ class TestPrimaryTransitComment:
         })
         assert _primary_transit_comment(tl, "PlanetA") == "secondary exoplanet transit"
 
+    def test_primary_target_column_nan_treated_as_secondary(self):
+        tl = pd.DataFrame({
+            "Planet Name": ["PlanetA"],
+            "Primary Target": [np.nan],
+        })
+        assert _primary_transit_comment(tl, "PlanetA") == "secondary exoplanet transit"
+
     def test_fallback_to_transits_to_capture_10(self):
         tl = pd.DataFrame({
             "Planet Name": ["PlanetA"],

@@ -224,3 +224,50 @@ class TestUsePass1:
         result_df, flag = self._run_schedule(tmp_path, use_pass1=False)
         assert flag is True
         assert result_df["Target"].notna().any()
+
+    def test_pass1_does_not_assign_when_interval_has_no_samples(self, tmp_path):
+        """An empty interval must not be treated as fully visible by Pass 1."""
+        vis_dir = tmp_path / "vis"
+        vis_dir.mkdir(parents=True, exist_ok=True)
+
+        t0 = datetime(2026, 1, 1)
+        times = [t0 + timedelta(minutes=m) for m in range(60)]
+        flags = [1] * 60
+        _write_star_visibility(vis_dir, "StarA", times, flags)
+
+        # Interval one day later -> zero overlapping visibility samples
+        start = t0 + timedelta(days=1)
+        stop = start + timedelta(hours=1)
+
+        v_names = np.array(["StarA"])
+        start_mjd = Time([start], scale="utc").to_value("mjd")
+        stop_mjd = Time([stop], scale="utc").to_value("mjd")
+
+        o_df = pd.DataFrame({
+            "Target": [None],
+            "start": [start.strftime("%Y-%m-%dT%H:%M:%SZ")],
+            "stop": [stop.strftime("%Y-%m-%dT%H:%M:%SZ")],
+            "RA": [np.nan],
+            "DEC": [np.nan],
+        })
+        o_list = pd.DataFrame({
+            "Star Name": ["StarA"],
+            "RA": [10.0],
+            "DEC": [20.0],
+        })
+
+        result_df, flag = observation_utils.schedule_occultation_targets(
+            v_names,
+            start_mjd,
+            stop_mjd,
+            start,
+            stop,
+            str(vis_dir),
+            o_df,
+            o_list,
+            "test",
+            use_pass1=True,
+        )
+
+        assert flag is False
+        assert (result_df["Target"] == "No target").all()

@@ -75,6 +75,41 @@ def _load_occultation_list(data_dir: Path) -> pd.DataFrame | None:
     return None
 
 
+def _infer_data_dir(schedule_path: Path) -> Path:
+    """Infer the run data directory from schedule location.
+
+    Preference order:
+    1. schedule parent / "data" (legacy/default layout)
+    2. A single child directory matching "data*" under schedule parent
+
+    Raises a clear error when inference is ambiguous or impossible.
+    """
+    root = schedule_path.parent
+    legacy = root / "data"
+    if legacy.is_dir():
+        return legacy
+
+    candidates = sorted(
+        child
+        for child in root.iterdir()
+        if child.is_dir() and child.name.startswith("data")
+    )
+    if len(candidates) == 1:
+        return candidates[0]
+
+    if not candidates:
+        raise FileNotFoundError(
+            "Could not infer --data-dir: no 'data' or 'data*' directory found "
+            f"next to schedule at {root}"
+        )
+
+    names = ", ".join(c.name for c in candidates)
+    raise ValueError(
+        "Could not infer --data-dir: multiple candidate directories found "
+        f"next to schedule at {root}: {names}. Please pass --data-dir explicitly."
+    )
+
+
 def _format_mjd_utc(mjd: float) -> str:
     try:
         dt = Time(mjd, format="mjd", scale="utc").to_datetime()
@@ -322,8 +357,11 @@ def main() -> None:
     schedule = _load_schedule(args.schedule)
 
     if args.data_dir is None:
-        # Infer data dir from schedule path
-        args.data_dir = args.schedule.parent / "data"
+        args.data_dir = _infer_data_dir(args.schedule)
+
+    if not args.data_dir.is_dir():
+        print(f"Data directory not found: {args.data_dir}", file=sys.stderr)
+        sys.exit(1)
 
     if args.list_visits:
         print(f"{'Idx':>4}  {'Target':30s}  {'Start':20s}  {'Stop':20s}  {'Duration':>8}")

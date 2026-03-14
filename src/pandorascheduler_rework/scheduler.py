@@ -1332,6 +1332,8 @@ def _primary_transit_comment(target_list: pd.DataFrame, planet_name: str) -> str
     row = match.iloc[0]
     if "Primary Target" in target_list.columns:
         val = row.get("Primary Target")
+        if pd.isna(val):
+            return "secondary exoplanet transit"
         try:
             if bool(val):
                 return "primary exoplanet transit"

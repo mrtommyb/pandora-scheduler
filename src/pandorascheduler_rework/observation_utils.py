@@ -309,6 +309,9 @@ def schedule_occultation_targets(
         all_visible = True
         for start, stop in zip(starts_array, stops_array):
             interval_mask = (vis_times >= start) & (vis_times <= stop)
+            if interval_mask.sum() == 0:
+                all_visible = False
+                break
             if not np.all(visibility[interval_mask] == 1):
                 all_visible = False
                 break
@@ -354,6 +357,12 @@ def schedule_occultation_targets(
         for idx, (start, stop) in enumerate(zip(starts_array, stops_array)):
             if pd.isna(schedule.loc[start, "Target"]):
                 interval_mask = (vis_times >= start) & (vis_times <= stop)
+
+                if interval_mask.sum() == 0:
+                    if pd.isna(schedule.loc[start, "Visibility"]):
+                        schedule.loc[start, "Visibility"] = 0
+                        o_df.loc[idx, "Visibility"] = 0
+                    continue
 
                 if np.all(visibility[interval_mask] == 1):
                     schedule.loc[start, "Target"] = v_name

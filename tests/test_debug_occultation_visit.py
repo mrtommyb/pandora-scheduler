@@ -21,6 +21,7 @@ _spec.loader.exec_module(_mod)
 
 _load_schedule = _mod._load_schedule
 _find_occultation_candidates = _mod._find_occultation_candidates
+_infer_data_dir = _mod._infer_data_dir
 debug_visit = _mod.debug_visit
 
 
@@ -50,6 +51,36 @@ class TestFindOccultationCandidates:
 
     def test_empty_when_no_aux_dir(self, tmp_path):
         assert _find_occultation_candidates(tmp_path) == []
+
+
+class TestInferDataDir:
+    def test_prefers_legacy_data_dir(self, tmp_path):
+        sched = tmp_path / "sched.csv"
+        sched.write_text("Target,Observation Start,Observation Stop\n")
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data_91_25_110").mkdir()
+        assert _infer_data_dir(sched) == (tmp_path / "data")
+
+    def test_uses_single_data_star_candidate(self, tmp_path):
+        sched = tmp_path / "sched.csv"
+        sched.write_text("Target,Observation Start,Observation Stop\n")
+        candidate = tmp_path / "data_91_25_110"
+        candidate.mkdir()
+        assert _infer_data_dir(sched) == candidate
+
+    def test_errors_when_no_candidates(self, tmp_path):
+        sched = tmp_path / "sched.csv"
+        sched.write_text("Target,Observation Start,Observation Stop\n")
+        with pytest.raises(FileNotFoundError, match="Could not infer --data-dir"):
+            _infer_data_dir(sched)
+
+    def test_errors_when_multiple_candidates(self, tmp_path):
+        sched = tmp_path / "sched.csv"
+        sched.write_text("Target,Observation Start,Observation Stop\n")
+        (tmp_path / "data_91_25_110").mkdir()
+        (tmp_path / "data_100_30_90").mkdir()
+        with pytest.raises(ValueError, match="multiple candidate directories"):
+            _infer_data_dir(sched)
 
 
 class TestDebugVisitOutput:
