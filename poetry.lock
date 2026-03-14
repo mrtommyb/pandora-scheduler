@@ -6,7 +6,7 @@ version = "7.2.0"
 description = "Astronomy and astrophysics core library"
 optional = false
 python-versions = ">=3.11"
-groups = ["main", "dev"]
+groups = ["main", "crossval"]
 files = [
     {file = "astropy-7.2.0-cp311-abi3-macosx_10_9_x86_64.whl", hash = "sha256:efac04df4cc488efe630c2fff1992d6516dfb16a06e197fb68bc9e8e3b85def1"},
     {file = "astropy-7.2.0-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:52e9a7d9c86b21f1af911a2930cd0c4a275fb302d455c89e11eedaffef6f2ad0"},
@@ -44,7 +44,7 @@ version = "0.2025.11.3.0.38.37"
 description = "IERS Earth Rotation and Leap Second tables for the astropy core package"
 optional = false
 python-versions = ">=3.8"
-groups = ["main", "dev"]
+groups = ["main", "crossval"]
 files = [
     {file = "astropy_iers_data-0.2025.11.3.0.38.37-py3-none-any.whl", hash = "sha256:f7e6bf830d1c6d022abaf39739a9dc7e42ea912675113da921967fe9a87d1de4"},
     {file = "astropy_iers_data-0.2025.11.3.0.38.37.tar.gz", hash = "sha256:e018a3efbb6a4e4ea5a5a2a73bb3575b0123f3643b415a7327ec1dbd169787dd"},
@@ -186,7 +186,7 @@ version = "2.3.4"
 description = "Fundamental package for array computing in Python"
 optional = false
 python-versions = ">=3.11"
-groups = ["main", "dev"]
+groups = ["main", "crossval"]
 files = [
     {file = "numpy-2.3.4-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:e78aecd2800b32e8347ce49316d3eaf04aed849cd5b38e0af39f829a4e59f5eb"},
     {file = "numpy-2.3.4-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:7fd09cc5d65bda1e79432859c40978010622112e9194e581e3415a3eccc7f43f"},
@@ -270,7 +270,7 @@ version = "25.0"
 description = "Core utilities for Python packages"
 optional = false
 python-versions = ">=3.8"
-groups = ["main", "dev"]
+groups = ["main", "crossval", "dev"]
 files = [
     {file = "packaging-25.0-py3-none-any.whl", hash = "sha256:29572ef2b1f17581046b3a2227d5c611fb25ec70ca1ba8554b24b0e69331a484"},
     {file = "packaging-25.0.tar.gz", hash = "sha256:d443872c98d677bf60f6a1f2f8c1cb748e8fe762d2bf9d3148b5599295b0fc4f"},
@@ -282,7 +282,7 @@ version = "2.3.3"
 description = "Powerful data structures for data analysis, time series, and statistics"
 optional = false
 python-versions = ">=3.9"
-groups = ["main", "dev"]
+groups = ["main", "crossval"]
 files = [
     {file = "pandas-2.3.3-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:376c6446ae31770764215a6c937f72d917f214b43560603cd60da6408f183b6c"},
     {file = "pandas-2.3.3-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:e19d192383eab2f4ceb30b412b22ea30690c9e618f78870357ae1d682912015a"},
@@ -374,13 +374,13 @@ xml = ["lxml (>=4.9.2)"]
 
 [[package]]
 name = "pandoravisibility"
-version = "0.2.0"
+version = "1.0.0"
 description = "A tool for calculating the visibility of targets from Pandora"
 optional = false
 python-versions = ">=3.11,<4.0"
-groups = ["dev"]
+groups = ["crossval"]
 files = []
-develop = true
+develop = false
 
 [package.dependencies]
 astropy = ">=7.0"
@@ -392,8 +392,10 @@ sgp4 = "^2.25"
 plotting = ["matplotlib (>=3.9,<4.0)"]
 
 [package.source]
-type = "directory"
-url = "../pandora-visibility"
+type = "git"
+url = "https://github.com/PandoraMission/pandora-visibility.git"
+reference = "HEAD"
+resolved_reference = "64dce42d8d606106faa5f23cc988d78e8e222262"
 
 [[package]]
 name = "pathspec"
@@ -458,7 +460,7 @@ version = "2.0.1.5"
 description = "Python bindings for ERFA"
 optional = false
 python-versions = ">=3.9"
-groups = ["main", "dev"]
+groups = ["main", "crossval"]
 files = [
     {file = "pyerfa-2.0.1.5-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:b282d7c60c4c47cf629c484c17ac504fcb04abd7b3f4dfcf53ee042afc3a5944"},
     {file = "pyerfa-2.0.1.5-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:be1aeb70390dd03a34faf96749d5cabc58437410b4aab7213c512323932427df"},
@@ -535,7 +537,7 @@ version = "2.9.0.post0"
 description = "Extensions to the standard Python datetime module"
 optional = false
 python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7"
-groups = ["main", "dev"]
+groups = ["main", "crossval"]
 files = [
     {file = "python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3"},
     {file = "python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427"},
@@ -550,7 +552,7 @@ version = "2025.2"
 description = "World timezone definitions, modern and historical"
 optional = false
 python-versions = "*"
-groups = ["main", "dev"]
+groups = ["main", "crossval"]
 files = [
     {file = "pytz-2025.2-py2.py3-none-any.whl", hash = "sha256:5ddf76296dd8c44c26eb8f4b6f35488f3ccbf6fbbd7adee0b7262d43f0ec2f00"},
     {file = "pytz-2025.2.tar.gz", hash = "sha256:360b9e3dbb49a209c21ad61809c7fb453643e048b38924c765813546746e81c3"},
@@ -562,7 +564,7 @@ version = "6.0.3"
 description = "YAML parser and emitter for Python"
 optional = false
 python-versions = ">=3.8"
-groups = ["main", "dev"]
+groups = ["main", "crossval"]
 files = [
     {file = "PyYAML-6.0.3-cp38-cp38-macosx_10_13_x86_64.whl", hash = "sha256:c2514fceb77bc5e7a2f7adfaa1feb2fb311607c9cb518dbc378688ec73d8292f"},
     {file = "PyYAML-6.0.3-cp38-cp38-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9c57bb8c96f6d1808c030b1687b9b5fb476abaa47f0db9c0101f5e9f394e97f4"},
@@ -674,7 +676,7 @@ version = "2.25"
 description = "Track Earth satellites given TLE data, using up-to-date 2020 SGP4 routines."
 optional = false
 python-versions = "*"
-groups = ["dev"]
+groups = ["crossval"]
 files = [
     {file = "sgp4-2.25-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:29fd9ad2ded9517f6ba10f91e2d993144400c6a925e2b7931198646625beafd4"},
     {file = "sgp4-2.25-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:9ad88a8ced4b78f337765e8463f7f11c5f86d9267f83fc8e3dd8982df67bff45"},
@@ -733,7 +735,7 @@ version = "1.17.0"
 description = "Python 2 and 3 compatibility utilities"
 optional = false
 python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7"
-groups = ["main", "dev"]
+groups = ["main", "crossval"]
 files = [
     {file = "six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"},
     {file = "six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81"},
@@ -767,7 +769,7 @@ version = "2025.2"
 description = "Provider of IANA time zone data"
 optional = false
 python-versions = ">=2"
-groups = ["main", "dev"]
+groups = ["main", "crossval"]
 files = [
     {file = "tzdata-2025.2-py2.py3-none-any.whl", hash = "sha256:1a403fada01ff9221ca8044d701868fa132215d84beb92242d9acd2147f667a8"},
     {file = "tzdata-2025.2.tar.gz", hash = "sha256:b60a638fcc0daffadf82fe0f57e53d06bdec2f36c4df66280ae79bce6bd6f2b9"},
@@ -776,4 +778,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "ffbc521a130192c4f497cb0f7182f05cebb8640f08e9495f391cf7a2307466ea"
+content-hash = "4ef3ccbcb6be9e41efb9428c079f35e6dacf8b9fba6a0f5caa526ece7e08b26e"
