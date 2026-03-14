@@ -398,6 +398,70 @@ class _ScienceCalendarBuilder:
                 start,
                 final_time,
             )
+            fallback_occultation = self._select_fallback_occultation_target(
+                ra_value,
+                dec_value,
+            )
+            seq_counter = 1
+            for change_position, change_idx in enumerate(augmented_changes):
+                if change_position == 0:
+                    segment_start = visit_times[0]
+                else:
+                    segment_start = visit_times[augmented_changes[change_position - 1] + 1]
+                segment_stop = visit_times[change_idx]
+                is_visible = bool(visibility_flags[change_idx])
+                if is_visible:
+                    current = segment_start
+                    while current < segment_stop:
+                        next_value = min(current + self.sequence_duration, segment_stop)
+                        priority = _target_priority(
+                            priority_flag,
+                            transit_start,
+                            transit_stop,
+                            current,
+                            next_value,
+                        )
+                        observation_sequence(
+                            visit_element,
+                            f"{seq_counter:03d}",
+                            target_name,
+                            priority,
+                            current.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            ra_value,
+                            dec_value,
+                            target_info if target_info is not None else pd.DataFrame(),
+                        )
+                        seq_counter += 1
+                        current = next_value
+                    continue
+                if fallback_occultation is None:
+                    continue
+                occ_target, ra_occ, dec_occ, occ_info = fallback_occultation
+                current = segment_start
+                while current < segment_stop:
+                    next_value = (
+                        min(current + self.occultation_limit, segment_stop)
+                        if self.config.break_occultation_sequences
+                        else segment_stop
+                    )
+                    observation_sequence(
+                        visit_element,
+                        f"{seq_counter:03d}",
+                        occ_target,
+                        "0",
+                        current.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        ra_occ,
+                        dec_occ,
+                        occ_info if occ_info is not None else pd.DataFrame(),
+                    )
+                    self.occultation_obs_time[occ_target] = (
+                        self.occultation_obs_time.get(occ_target, timedelta())
+                        + (next_value - current)
+                    )
+                    seq_counter += 1
+                    current = next_value
             return
 
         occ_df, scheduled = occultation_info
@@ -408,6 +472,70 @@ class _ScienceCalendarBuilder:
                 start,
                 final_time,
             )
+            fallback_occultation = self._select_fallback_occultation_target(
+                ra_value,
+                dec_value,
+            )
+            seq_counter = 1
+            for change_position, change_idx in enumerate(augmented_changes):
+                if change_position == 0:
+                    segment_start = visit_times[0]
+                else:
+                    segment_start = visit_times[augmented_changes[change_position - 1] + 1]
+                segment_stop = visit_times[change_idx]
+                is_visible = bool(visibility_flags[change_idx])
+                if is_visible:
+                    current = segment_start
+                    while current < segment_stop:
+                        next_value = min(current + self.sequence_duration, segment_stop)
+                        priority = _target_priority(
+                            priority_flag,
+                            transit_start,
+                            transit_stop,
+                            current,
+                            next_value,
+                        )
+                        observation_sequence(
+                            visit_element,
+                            f"{seq_counter:03d}",
+                            target_name,
+                            priority,
+                            current.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            ra_value,
+                            dec_value,
+                            target_info if target_info is not None else pd.DataFrame(),
+                        )
+                        seq_counter += 1
+                        current = next_value
+                    continue
+                if fallback_occultation is None:
+                    continue
+                occ_target, ra_occ, dec_occ, occ_info = fallback_occultation
+                current = segment_start
+                while current < segment_stop:
+                    next_value = (
+                        min(current + self.occultation_limit, segment_stop)
+                        if self.config.break_occultation_sequences
+                        else segment_stop
+                    )
+                    observation_sequence(
+                        visit_element,
+                        f"{seq_counter:03d}",
+                        occ_target,
+                        "0",
+                        current.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        ra_occ,
+                        dec_occ,
+                        occ_info if occ_info is not None else pd.DataFrame(),
+                    )
+                    self.occultation_obs_time[occ_target] = (
+                        self.occultation_obs_time.get(occ_target, timedelta())
+                        + (next_value - current)
+                    )
+                    seq_counter += 1
+                    current = next_value
             return
 
         oc_index = 0
@@ -549,6 +677,53 @@ class _ScienceCalendarBuilder:
                 target_info if target_info is not None else pd.DataFrame(),
             )
             seq_counter += 1
+
+    def _select_fallback_occultation_target(
+        self,
+        reference_ra: float,
+        reference_dec: float,
+    ) -> Optional[tuple[str, float, float, Optional[pd.DataFrame]]]:
+        if self.occ_catalog is None or self.occ_catalog.empty:
+            return None
+        if "Star Name" not in self.occ_catalog.columns:
+            return None
+
+        candidates = self.occ_catalog.copy()
+        available_rows = []
+        for _, row in candidates.iterrows():
+            name = str(row.get("Star Name", "")).strip()
+            if not name:
+                continue
+            current_occ_time = self.occultation_obs_time.get(name, timedelta())
+            if current_occ_time >= self._get_occultation_time_limit(name):
+                continue
+            available_rows.append(row)
+
+        if not available_rows:
+            return None
+
+        candidates = pd.DataFrame(available_rows)
+        if self.config.prioritise_occultations_by_slew:
+            candidates = _prioritise_occultation_targets(
+                candidates,
+                reference_ra,
+                reference_dec,
+            )
+
+        chosen = candidates.iloc[0]
+        occ_target = str(chosen.get("Star Name", "")).strip()
+        if not occ_target:
+            return None
+
+        occ_info = _lookup_occultation_info(
+            occ_target,
+            self.target_catalog,
+            self.aux_catalog,
+            self.occ_catalog,
+        )
+        ra_occ = _fallback_float(chosen.get("RA"), occ_info, "RA")
+        dec_occ = _fallback_float(chosen.get("DEC"), occ_info, "DEC")
+        return occ_target, ra_occ, dec_occ, occ_info
 
     def _find_occultation_target(
         self,

@@ -543,6 +543,7 @@ def compute_visibility_with_constraints(
     nadir_unit: np.ndarray,
     sun_unit: np.ndarray,
     moon_unit: np.ndarray,
+    observer_dist_km: Optional[np.ndarray],
     zenith_unit: np.ndarray,
     limb_angle_rad: np.ndarray,
     orbit_slices: list[slice],
@@ -558,6 +559,9 @@ def compute_visibility_with_constraints(
     ----------
     target_unit : ndarray ``(N, 3)``
     nadir_unit, sun_unit, moon_unit, zenith_unit : ndarray ``(N, 3)``
+    observer_dist_km : ndarray ``(N,)`` or None
+        Retained for backward compatibility; limb geometry currently uses
+        ``limb_angle_rad`` directly.
     limb_angle_rad : ndarray ``(N,)``
     orbit_slices : list of slice
     earth_center_sep_deg : ndarray ``(N,)``

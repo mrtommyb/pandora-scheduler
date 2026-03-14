@@ -361,6 +361,7 @@ def _build_star_visibility(
         nadir_unit=payload["nadir_unit"],
         sun_unit=payload["sun_unit"],
         moon_unit=payload["moon_unit"],
+        observer_dist_km=payload["observer_dist_km"],
         zenith_unit=payload["zenith_unit"],
         limb_angle_rad=payload["limb_angle_rad"],
         orbit_slices=payload["orbit_slices"],

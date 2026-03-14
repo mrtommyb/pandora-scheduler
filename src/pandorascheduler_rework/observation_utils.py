@@ -307,14 +307,20 @@ def schedule_occultation_targets(
 
         # Check if visible for ALL intervals individually (less strict)
         all_visible = True
+        has_nonzero_interval_samples = False
         for start, stop in zip(starts_array, stops_array):
             interval_mask = (vis_times >= start) & (vis_times <= stop)
-            if interval_mask.sum() == 0:
-                all_visible = False
-                break
+            if stop > start and interval_mask.sum() > 0:
+                has_nonzero_interval_samples = True
             if not np.all(visibility[interval_mask] == 1):
                 all_visible = False
                 break
+
+        # Guard against false positives when a candidate has no data at all
+        # across the substantive (non-zero duration) intervals.
+        has_nonzero_interval = bool(np.any(stops_array > starts_array))
+        if has_nonzero_interval and not has_nonzero_interval_samples:
+            all_visible = False
 
         if not all_visible:
             continue
@@ -354,15 +360,22 @@ def schedule_occultation_targets(
 
         vis_times, visibility = vis_data
 
+        # If the candidate has no samples across all non-zero intervals in this
+        # visit, skip it (prevents empty-mask full-visibility false positives).
+        has_nonzero_interval_samples = False
+        for start, stop in zip(starts_array, stops_array):
+            if stop <= start:
+                continue
+            interval_mask = (vis_times >= start) & (vis_times <= stop)
+            if interval_mask.sum() > 0:
+                has_nonzero_interval_samples = True
+                break
+        if not has_nonzero_interval_samples and bool(np.any(stops_array > starts_array)):
+            continue
+
         for idx, (start, stop) in enumerate(zip(starts_array, stops_array)):
             if pd.isna(schedule.loc[start, "Target"]):
                 interval_mask = (vis_times >= start) & (vis_times <= stop)
-
-                if interval_mask.sum() == 0:
-                    if pd.isna(schedule.loc[start, "Visibility"]):
-                        schedule.loc[start, "Visibility"] = 0
-                        o_df.loc[idx, "Visibility"] = 0
-                    continue
 
                 if np.all(visibility[interval_mask] == 1):
                     schedule.loc[start, "Target"] = v_name
@@ -440,8 +453,13 @@ def schedule_occultation_targets(
         total_intervals,
         total_intervals - assigned_after_p3,
     )
-    if "Target" in o_df.columns and o_df["Target"].notna().any():
-        return o_df, True
+    if "Target" in o_df.columns:
+        assigned_values = o_df["Target"]
+        assigned_mask = assigned_values.notna() & (
+            assigned_values.astype(str).str.strip() != ""
+        )
+        if assigned_mask.any():
+            return o_df, True
 
     # PASS 4: For intervals still unassigned, split the interval into minute
     # resolution segments and greedily assign contiguous covered runs to the
