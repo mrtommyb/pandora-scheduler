@@ -39,25 +39,6 @@ class TestPandoraSchedulerConfig:
         assert config.transit_scheduling_weights == (0.6, 0.2, 0.2)
         assert config.show_progress is True
         
-    def test_sched_weights_validation_pass(self):
-        """Test that sched_weights summing to 1.0 validates."""
-        config = PandoraSchedulerConfig(
-            window_start=datetime(2026, 2, 5),
-            window_end=datetime(2027, 2, 5),
-            transit_scheduling_weights=(0.5, 0.3, 0.2),  # Sums to 1.0
-        )
-
-        assert sum(config.transit_scheduling_weights) == pytest.approx(1.0)
-        
-    def test_sched_weights_validation_fail(self):
-        """Test that sched_weights not summing to 1.0 raises error."""
-        with pytest.raises(ValueError, match="transit_scheduling_weights must sum to 1.0"):
-            PandoraSchedulerConfig(
-                window_start=datetime(2026, 2, 5),
-                window_end=datetime(2027, 2, 5),
-                transit_scheduling_weights=(0.5, 0.5, 0.5),  # Sums to 1.5!
-            )
-            
     def test_transit_scheduling_weights_validation_pass(self):
         """Test that transit_scheduling_weights summing to 1.0 validates."""
         config = PandoraSchedulerConfig(
