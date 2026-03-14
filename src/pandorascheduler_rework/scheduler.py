@@ -837,14 +837,11 @@ def _schedule_auxiliary_target(
             target_label = str(record["Target"])
             if target_label == "Free Time":
                 continue
-
             duration = record["Observation Stop"] - record["Observation Start"]
             if isinstance(duration, pd.Timedelta):
                 duration = duration.to_pytimedelta()
-
             if target_label.endswith(" STD") and target_label in std_visible_duration_by_target:
                 duration = std_visible_duration_by_target[target_label]
-
             state.all_target_obs_time[target_label] = (
                 state.all_target_obs_time.get(target_label, timedelta()) + duration
             )
@@ -853,12 +850,16 @@ def _schedule_auxiliary_target(
     if (
         active_start - state.last_std_obs
         > timedelta(days=config.std_obs_frequency_days)
+        and (stop - active_start).total_seconds() / 60.0 > config.min_sequence_minutes
     ):
+        std_path = inputs.paths.data_dir / "monitoring-standard_targets.csv"
+        std_df = read_csv_cached(str(std_path))
+        if std_df is not None:
+            std_df = std_df.sort_values("Priority", ascending=False, ignore_index=True)
+            std_records = std_df.to_dict(orient="records")
+        else:
+            std_records = []
 
-            std_visible_duration_by_target[std_label] = (
-                std_visible_duration_by_target.get(std_label, timedelta())
-                + best_duration
-            )
         # Pre-load visibility DataFrames for all standard stars so they can
         # be re-used when we slide the search window.
         std_vis_cache: list[tuple[dict, pd.DataFrame]] = []
