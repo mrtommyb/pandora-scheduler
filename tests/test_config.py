@@ -117,7 +117,12 @@ class TestPandoraSchedulerConfig:
         assert config.transit_scheduling_weights == (0.8, 0.0, 0.2)
         assert config.sun_avoidance_deg == 91.0
         assert config.moon_avoidance_deg == 25.0
-        assert config.earth_avoidance_deg == 86.0
+        assert config.earth_avoidance_deg == 110.0
+        assert config.earth_avoidance_day_deg is None
+        assert config.earth_avoidance_night_deg is None
+        assert config.st_required == 1
+        assert config.roll_step_deg == 2.0
+        assert config.min_power_frac == 0.7
         assert config.obs_sequence_duration_min == 90
         assert config.show_progress is False
         

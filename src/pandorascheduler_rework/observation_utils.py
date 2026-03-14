@@ -240,6 +240,7 @@ def schedule_occultation_targets(
     o_df,
     o_list,
     try_occ_targets: str,
+    show_progress: bool = False,
 ):
     starts_array = np.asarray(starts, dtype=float)
     stops_array = np.asarray(stops, dtype=float)
@@ -293,7 +294,7 @@ def schedule_occultation_targets(
         return data
 
     # PASS 1: Search for a single target that covers ALL intervals
-    for v_name in tqdm(v_names, desc=f"{description} (Pass 1)", leave=False):
+    for v_name in tqdm(v_names, desc=f"{description} (Pass 1)", leave=False, disable=not show_progress):
         vis_data = _get_visibility(v_name)
         if vis_data is None:
             continue
@@ -326,7 +327,7 @@ def schedule_occultation_targets(
         return o_df, True
 
     # PASS 2: Fill gaps with multiple targets (Greedy approach)
-    for v_name in tqdm(v_names, desc=f"{description} (Pass 2)", leave=False):
+    for v_name in tqdm(v_names, desc=f"{description} (Pass 2)", leave=False, disable=not show_progress):
         # If schedule is full, we are done
         if not schedule["Target"].isna().any():
             return o_df, True
@@ -594,12 +595,12 @@ def save_observation_time_report(
                 else:
                     requested_hours_by_target[key] = value
 
-        # Overlap is usually a data issue (e.g., a target appears in both auxiliary and occultation lists).
-        # Warn so users can fix upstream catalogs, but do not fail the pipeline.
+        # Overlap is expected (e.g., a target appears in both auxiliary and
+        # occultation lists).  Log at debug level for traceability.
         for target_name, source_names in requested_hours_sources_by_target.items():
             if len(source_names) > 1:
                 sources_str = ", ".join(sorted(source_names))
-                LOGGER.warning(
+                LOGGER.debug(
                     "Target %r appears in multiple requested-hours catalogs: %s",
                     target_name,
                     sources_str,

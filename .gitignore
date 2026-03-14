@@ -74,7 +74,7 @@ output_standalone/data/*.xml
 src/pandorascheduler/data/*.xml
 
 # Temporary output directories
-output_standalone/temp/
+output_standalone/
 output_standalone_old/
 output*/
 

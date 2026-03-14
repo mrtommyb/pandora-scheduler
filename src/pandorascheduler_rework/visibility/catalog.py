@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import concurrent.futures
+import io
 import logging
+import multiprocessing
+import os
 from pathlib import Path
 from typing import Iterable
 
@@ -11,10 +15,18 @@ import pandas as pd
 from astropy import units as u
 from astropy.coordinates import EarthLocation, SkyCoord
 from astropy.time import Time
+from tqdm import tqdm
 
 from pandorascheduler_rework.config import PandoraSchedulerConfig
 from pandorascheduler_rework.utils.io import read_csv_cached, read_parquet_cached
 
+from .constraints import (
+    _R_EARTH_KM,
+    _normalise,
+    compute_visibility_with_constraints,
+    detect_orbit_boundaries,
+    orbit_slices_from_boundaries,
+)
 from .geometry import (
     MinuteCadence,
     build_minute_cadence,
@@ -23,6 +35,48 @@ from .geometry import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Worker state for multiprocessing (set once per worker via _init_worker)
+# ---------------------------------------------------------------------------
+_worker_payload: dict | None = None
+_worker_config: PandoraSchedulerConfig | None = None
+
+
+def _init_worker(
+    payload: dict,
+    config: PandoraSchedulerConfig,
+) -> None:
+    """Initialise per-worker shared state (called once when worker starts)."""
+    global _worker_payload, _worker_config  # noqa: PLW0603
+    _worker_payload = payload
+    _worker_config = config
+
+
+def _worker_build_star(
+    star_name: str,
+    star_coord: SkyCoord,
+    is_exoplanet: bool,
+) -> tuple[str, bytes]:
+    """Build visibility for one star and return parquet bytes.
+
+    Runs inside a worker process.  Reads *_worker_payload* and
+    *_worker_config* set by :func:`_init_worker`.
+    """
+    assert _worker_payload is not None and _worker_config is not None
+    df = _build_star_visibility(_worker_payload, star_coord, _worker_config)
+    if not is_exoplanet:
+        df["Time(MJD_UTC)"] = np.round(df["Time(MJD_UTC)"], 6)
+    buf = io.BytesIO()
+    df.to_parquet(
+        buf,
+        index=False,
+        engine="pyarrow",
+        compression="snappy",
+        write_statistics=False,
+        use_dictionary=False,
+    )
+    return star_name, buf.getvalue()
 
 
 def build_visibility_catalog(
@@ -66,27 +120,91 @@ def build_visibility_catalog(
         base_payload = _build_base_payload(ephemeris, cadence)
         star_metadata = _build_star_metadata(target_manifest)
 
+        is_exoplanet = "exoplanet" in target_path.name.lower()
+
+        # Resolve coordinates up front (fast, needs star_metadata)
+        work_items: list[tuple[str, SkyCoord]] = []
         for star_name, row in stars_to_generate:
-            output_dir = output_root / star_name
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_path = output_dir / f"Visibility for {star_name}.parquet"
-
             star_coord = _resolve_star_coord(row, star_metadata)
-            visibility_df = _build_star_visibility(base_payload, star_coord, config)
+            work_items.append((star_name, star_coord))
 
-            if "exoplanet" not in target_path.name.lower():
-                visibility_df["Time(MJD_UTC)"] = np.round(
-                    visibility_df["Time(MJD_UTC)"], 6
+        n_stars = len(work_items)
+        max_workers = config.parallel_workers or (os.cpu_count() or 1)
+        n_workers = min(n_stars, max_workers)
+
+        if n_workers > 1:
+            LOGGER.info(
+                "Generating visibility for %d stars using %d workers",
+                n_stars,
+                n_workers,
+            )
+            available_methods = multiprocessing.get_all_start_methods()
+            start_method = (
+                "forkserver" if "forkserver" in available_methods else "spawn"
+            )
+            # Prefer forkserver where available to avoid macOS fork-safety
+            # warnings; otherwise fall back to spawn for portability.
+            ctx = multiprocessing.get_context(start_method)
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=n_workers,
+                mp_context=ctx,
+                initializer=_init_worker,
+                initargs=(base_payload, config),
+            ) as executor:
+                futures = {
+                    executor.submit(
+                        _worker_build_star, name, coord, is_exoplanet
+                    ): name
+                    for name, coord in work_items
+                }
+                progress = tqdm(
+                    concurrent.futures.as_completed(futures),
+                    total=n_stars,
+                    desc="Visibility",
+                    unit="star",
+                    disable=not config.show_progress,
+                )
+                for future in progress:
+                    star_name, parquet_bytes = future.result()
+                    output_dir = output_root / star_name
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    out_path = (
+                        output_dir / f"Visibility for {star_name}.parquet"
+                    )
+                    out_path.write_bytes(parquet_bytes)
+        else:
+            LOGGER.info(
+                "Generating visibility for %d star(s) (serial)", n_stars
+            )
+            for star_name, star_coord in tqdm(
+                work_items,
+                desc="Visibility",
+                unit="star",
+                disable=not config.show_progress,
+            ):
+                output_dir = output_root / star_name
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_path = (
+                    output_dir / f"Visibility for {star_name}.parquet"
                 )
 
-            visibility_df.to_parquet(
-                output_path,
-                index=False,
-                engine="pyarrow",
-                compression="snappy",
-                write_statistics=False,
-                use_dictionary=False,
-            )
+                visibility_df = _build_star_visibility(
+                    base_payload, star_coord, config
+                )
+
+                if not is_exoplanet:
+                    visibility_df["Time(MJD_UTC)"] = np.round(
+                        visibility_df["Time(MJD_UTC)"], 6
+                    )
+
+                visibility_df.to_parquet(
+                    output_path,
+                    index=False,
+                    engine="pyarrow",
+                    compression="snappy",
+                    write_statistics=False,
+                    use_dictionary=False,
+                )
     else:
         # Still need star_metadata for planet transits
         star_metadata = _build_star_metadata(target_manifest)
@@ -145,25 +263,58 @@ def _build_base_payload(ephemeris, cadence: MinuteCadence) -> dict[str, np.ndarr
     time_utc = Time(mjd_array, format="mjd", scale="utc")
     datetime_utc = time_utc.datetime64
 
+    # SkyCoord objects for angular separation (kept for backward compat)
+    earth_pc_sc = SkyCoord(
+        ephemeris.earth_pc,
+        unit=u.km,
+        representation_type="cartesian",
+    )
+    sun_pc_sc = SkyCoord(
+        ephemeris.sun_pc,
+        unit=u.km,
+        representation_type="cartesian",
+    )
+    moon_pc_sc = SkyCoord(
+        ephemeris.moon_pc,
+        unit=u.km,
+        representation_type="cartesian",
+    )
+
+    # --- Precompute unit vectors for constraint evaluation (once for all stars) ---
+    earth_pc_xyz = ephemeris.earth_pc  # (N, 3) km, s/c → Earth (nadir direction)
+    sun_pc_xyz = ephemeris.sun_pc      # (N, 3) km, s/c → Sun
+    moon_pc_xyz = ephemeris.moon_pc    # (N, 3) km, s/c → Moon
+
+    nadir_unit = _normalise(earth_pc_xyz)           # s/c → Earth centre
+    zenith_unit = -nadir_unit                       # Earth centre → s/c
+    sun_unit = _normalise(sun_pc_xyz)
+    moon_unit = _normalise(moon_pc_xyz)
+
+    observer_dist_km = np.linalg.norm(earth_pc_xyz, axis=1)  # (N,)
+    limb_angle_rad = np.arccos(
+        np.clip(_R_EARTH_KM / observer_dist_km, -1.0, 1.0)
+    )  # (N,)
+
+    # Orbit boundary detection from sub-satellite latitude
+    orbit_boundaries = detect_orbit_boundaries(ephemeris.spacecraft_lat_deg)
+    orbit_slices = orbit_slices_from_boundaries(orbit_boundaries, len(mjd_array))
+
     return {
         "Time(MJD_UTC)": mjd_array,
         "Time_UTC": datetime_utc,
         "SAA_Crossing": np.round(saa_crossing, 1),
-        "earth_pc": SkyCoord(
-            ephemeris.earth_pc,
-            unit=u.km,
-            representation_type="cartesian",
-        ),
-        "sun_pc": SkyCoord(
-            ephemeris.sun_pc,
-            unit=u.km,
-            representation_type="cartesian",
-        ),
-        "moon_pc": SkyCoord(
-            ephemeris.moon_pc,
-            unit=u.km,
-            representation_type="cartesian",
-        ),
+        # SkyCoord objects for backward-compatible separations
+        "earth_pc": earth_pc_sc,
+        "sun_pc": sun_pc_sc,
+        "moon_pc": moon_pc_sc,
+        # Unit vectors for constraint engine
+        "nadir_unit": nadir_unit,
+        "zenith_unit": zenith_unit,
+        "sun_unit": sun_unit,
+        "moon_unit": moon_unit,
+        "observer_dist_km": observer_dist_km,
+        "limb_angle_rad": limb_angle_rad,
+        "orbit_slices": orbit_slices,
     }
 
 
@@ -172,15 +323,31 @@ def _build_star_visibility(
     star_coord: SkyCoord,
     config: PandoraSchedulerConfig,
 ) -> pd.DataFrame:
-    sun_sep = payload["sun_pc"].separation(star_coord).deg
-    moon_sep = payload["moon_pc"].separation(star_coord).deg
-    earth_sep = payload["earth_pc"].separation(star_coord).deg
+    # --- Target unit vector (direction from observer to star) ---
+    # Use the SkyCoord Earth-centre separation as the baseline Earth check.
+    earth_center_sep_deg = payload["earth_pc"].separation(star_coord).deg
 
-    sun_req = sun_sep > config.sun_avoidance_deg
-    moon_req = moon_sep > config.moon_avoidance_deg
-    earth_req = earth_sep > config.earth_avoidance_deg
+    # Build target unit vector in the same ECI frame used by the ephemeris.
+    # SkyCoord.cartesian gives unit direction; replicate for each timestep.
+    tgt_cart = star_coord.icrs.cartesian
+    tgt_unit_1 = np.array([tgt_cart.x.value, tgt_cart.y.value, tgt_cart.z.value])
+    tgt_unit_1 = tgt_unit_1 / np.linalg.norm(tgt_unit_1)
+    N = len(payload["Time(MJD_UTC)"])
+    target_unit = np.broadcast_to(tgt_unit_1, (N, 3)).copy()
 
-    visible = (sun_req & moon_req & earth_req).astype(float)
+    results = compute_visibility_with_constraints(
+        target_unit=target_unit,
+        nadir_unit=payload["nadir_unit"],
+        sun_unit=payload["sun_unit"],
+        moon_unit=payload["moon_unit"],
+        zenith_unit=payload["zenith_unit"],
+        limb_angle_rad=payload["limb_angle_rad"],
+        orbit_slices=payload["orbit_slices"],
+        earth_center_sep_deg=earth_center_sep_deg,
+        config=config,
+    )
+
+    visible = results["visible"].astype(float)
 
     # Use pre-computed datetime array from payload (computed once for all stars)
     data = {
@@ -188,9 +355,11 @@ def _build_star_visibility(
         "Time_UTC": payload["Time_UTC"],
         "SAA_Crossing": payload["SAA_Crossing"],
         "Visible": np.round(visible, 1),
-        "Earth_Sep": np.round(earth_sep, 3),
-        "Moon_Sep": np.round(moon_sep, 3),
-        "Sun_Sep": np.round(sun_sep, 3),
+        "Earth_Sep": np.round(earth_center_sep_deg, 3),
+        "Moon_Sep": np.round(results["moon_sep"], 3),
+        "Sun_Sep": np.round(results["sun_sep"], 3),
+        "Roll_Deg": np.round(results["roll_deg"], 2),
+        "N_ST_Pass": results["n_st_pass"].astype(int),
     }
     return pd.DataFrame(data)
 

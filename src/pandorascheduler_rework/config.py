@@ -100,8 +100,59 @@ class PandoraSchedulerConfig:
     moon_avoidance_deg: float = 25.0
     """Minimum angle from Moon (degrees)."""
 
-    earth_avoidance_deg: float = 86.0
-    """Minimum angle from Earth limb (degrees)."""
+    earth_avoidance_deg: float = 110.0
+    """Default Earth-center avoidance angle (degrees).
+
+    Used uniformly when both day/night overrides are None. When either
+    ``earth_avoidance_day_deg`` or ``earth_avoidance_night_deg`` is set,
+    those values take precedence for the corresponding orbital phase.
+    """
+
+    earth_avoidance_day_deg: Optional[float] = None
+    """Earth-center avoidance when the nearest limb is sunlit (degrees).
+
+    Set to ``None`` to use ``earth_avoidance_deg`` uniformly.
+    Recommended value when enabled: 110.0.
+    """
+
+    earth_avoidance_night_deg: Optional[float] = None
+    """Earth-center avoidance when the nearest limb is in shadow (degrees).
+
+    Set to ``None`` to use ``earth_avoidance_deg`` uniformly.
+    Recommended value when enabled: 80.0.
+    """
+
+    # ============================================================================
+    # STAR TRACKER KEEPOUT ANGLES (degrees)
+    # ============================================================================
+
+    st_sun_min_deg: float = 0.0
+    """Minimum star-tracker–Sun separation (degrees). 0 = disabled."""
+
+    st_moon_min_deg: float = 0.0
+    """Minimum star-tracker–Moon separation (degrees). 0 = disabled."""
+
+    st_earthlimb_min_deg: float = 0.0
+    """Minimum star-tracker–Earth-limb separation (degrees). 0 = disabled."""
+
+    st1_earthlimb_min_deg: Optional[float] = None
+    """Per-tracker override for ST1 Earth-limb keepout. None = use shared."""
+
+    st2_earthlimb_min_deg: Optional[float] = None
+    """Per-tracker override for ST2 Earth-limb keepout. None = use shared."""
+
+    st_required: int = 1
+    """Number of star trackers required to pass: 0 (skip), 1 (OR), or 2 (AND)."""
+
+    # ============================================================================
+    # ROLL OPTIMISATION
+    # ============================================================================
+
+    roll_step_deg: float = 2.0
+    """Roll sweep step size (degrees). Smaller = more accurate but slower."""
+
+    min_power_frac: float = 0.7
+    """Minimum solar power fraction to accept a roll angle."""
 
     # ============================================================================
     # XML GENERATION PARAMETERS
@@ -144,6 +195,18 @@ class PandoraSchedulerConfig:
 
     prioritise_occultations_by_slew: bool = False
     """Prioritize occultation targets by slew angle."""
+
+    # ============================================================================
+    # PARALLELISM
+    # ============================================================================
+
+    parallel_workers: int = 0
+    """Number of parallel workers for visibility generation.
+
+    0  = auto (use all available CPUs).
+    1  = serial (no multiprocessing overhead, useful for debugging).
+    N  = use exactly N worker processes.
+    """
 
     # ============================================================================
     # LEGACY COMPATIBILITY
@@ -210,3 +273,81 @@ class PandoraSchedulerConfig:
                 "transit_coverage_min must be in [0, 1], got %s"
                 % (self.transit_coverage_min,)
             )
+
+        # Validate star tracker required count
+        if self.st_required not in (0, 1, 2):
+            raise ValueError(
+                "st_required must be 0, 1, or 2, got %s" % (self.st_required,)
+            )
+
+        # Validate roll step
+        if self.roll_step_deg <= 0:
+            raise ValueError(
+                "roll_step_deg must be > 0, got %s" % (self.roll_step_deg,)
+            )
+
+        # Validate min_power_frac
+        if not 0.0 <= self.min_power_frac <= 1.0:
+            raise ValueError(
+                "min_power_frac must be in [0, 1], got %s"
+                % (self.min_power_frac,)
+            )
+
+        # Validate parallel worker count
+        if self.parallel_workers < 0:
+            raise ValueError(
+                "parallel_workers must be >= 0, got %s"
+                % (self.parallel_workers,)
+            )
+
+        # Validate parallel worker count
+        if self.parallel_workers < 0:
+            raise ValueError(
+                "parallel_workers must be >= 0, got %s"
+                % (self.parallel_workers,)
+            )
+
+
+def build_default_data_subdir(
+    sun_avoidance_deg: float,
+    moon_avoidance_deg: float,
+    earth_avoidance_deg: float,
+) -> str:
+    """Build the default run data directory name from keepout angles."""
+
+    return (
+        f"data_{int(float(sun_avoidance_deg))}_"
+        f"{int(float(moon_avoidance_deg))}_"
+        f"{int(float(earth_avoidance_deg))}"
+    )
+
+
+def resolve_data_subdir(
+    extra_inputs: Mapping[str, object] | None,
+    *,
+    sun_avoidance_deg: float,
+    moon_avoidance_deg: float,
+    earth_avoidance_deg: float,
+) -> str:
+    """Resolve the run data directory name.
+
+    When ``extra_inputs.data_subdir`` is not provided, derive the directory name
+    from the keepout angles so multiple runs under one output root can coexist.
+    """
+
+    raw_value = None if extra_inputs is None else extra_inputs.get("data_subdir")
+    if raw_value is None or str(raw_value).strip() == "":
+        return build_default_data_subdir(
+            sun_avoidance_deg,
+            moon_avoidance_deg,
+            earth_avoidance_deg,
+        )
+
+    candidate = str(raw_value).strip()
+    path_candidate = Path(candidate)
+    if path_candidate.is_absolute():
+        raise ValueError("extra_inputs.data_subdir must be a relative directory name")
+    if path_candidate.name != candidate:
+        raise ValueError(
+            "extra_inputs.data_subdir must not include path separators"
+        )

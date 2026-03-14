@@ -548,6 +548,7 @@ class _ScienceCalendarBuilder:
                 reference_dec,
                 self.config.prioritise_occultations_by_slew,
                 excluded_targets,
+                show_progress=self.config.show_progress,
             )
             if flag and result_df is not None:
                 return result_df, True
@@ -567,7 +568,7 @@ def _normalise_target_name(target: str) -> tuple[str, str]:
     if target.endswith("STD"):
         stripped = target[:-4]
         return stripped, stripped
-    if target.endswith(tuple("bcdef")) and target != "EV_Lac":
+    if target.endswith(tuple("bcdef")) and target not in ("EV_Lac", "AF_Psc"):
         return target, target[:-1].strip()
     return target, target
 
@@ -892,6 +893,7 @@ def _build_occultation_schedule(
     reference_dec: float,
     prioritise_by_slew: bool,
     excluded_targets: Optional[set] = None,
+    show_progress: bool = False,
 ) -> tuple[Optional[pd.DataFrame], bool]:
     if not starts or not stops:
         return None, False
@@ -954,6 +956,7 @@ def _build_occultation_schedule(
         occ_df,
         occ_list,
         label,
+        show_progress=show_progress,
     )
     return occ_df, flag
 

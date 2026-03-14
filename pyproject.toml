@@ -12,7 +12,7 @@ packages = [
 python = "^3.12"
 numpy = "^2.1.0"
 pandas = "^2.2.0"
-astropy = "^6.0.0"
+astropy = ">=6.0.0"
 tqdm = "^4.66.0"
 
 [tool.poetry.group.dev.dependencies]
@@ -20,6 +20,12 @@ black = "^24.1.0"
 flake8 = "^7.0.0"
 pytest = "^8.2.0"
 ruff = "^0.14.7"
+
+[tool.poetry.group.crossval]
+optional = true
+
+[tool.poetry.group.crossval.dependencies]
+pandoravisibility = { git = "https://github.com/PandoraMission/pandora-visibility.git" }
 
 [tool.pytest.ini_options]
 filterwarnings = [

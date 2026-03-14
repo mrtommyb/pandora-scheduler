@@ -121,7 +121,7 @@ def test_build_visibility_catalog_generates_star_and_planet_outputs(tmp_path, mo
     # Verify star visibility Parquet was created with correct structure
     star_df = pd.read_parquet(star_output)
     assert not star_df.empty
-    expected_cols = {"Time(MJD_UTC)", "Time_UTC", "SAA_Crossing", "Visible", "Earth_Sep", "Moon_Sep", "Sun_Sep"}
+    expected_cols = {"Time(MJD_UTC)", "Time_UTC", "SAA_Crossing", "Visible", "Earth_Sep", "Moon_Sep", "Sun_Sep", "Roll_Deg", "N_ST_Pass"}
     assert set(star_df.columns) == expected_cols
 
     star_visibility = pd.read_parquet(star_output)
@@ -163,9 +163,11 @@ def test_build_visibility_catalog_generates_star_and_planet_outputs(tmp_path, mo
         }
     )
 
-    # Drop Time_UTC for comparison since datetime conversion may have microsecond differences
-    star_visibility_compare = star_visibility.drop(columns=["Time_UTC"])
-    expected_star_compare = expected_star.drop(columns=["Time_UTC"])
+    # Drop Time_UTC, Roll_Deg, N_ST_Pass for comparison since those are new
+    # constraint-related columns and datetime conversion may have microsecond differences
+    drop_cols = ["Time_UTC", "Roll_Deg", "N_ST_Pass"]
+    star_visibility_compare = star_visibility.drop(columns=[c for c in drop_cols if c in star_visibility.columns])
+    expected_star_compare = expected_star.drop(columns=[c for c in drop_cols if c in expected_star.columns])
     pd.testing.assert_frame_equal(star_visibility_compare, expected_star_compare)
 
     assert not planet_visibility.empty

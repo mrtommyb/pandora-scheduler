@@ -286,14 +286,14 @@ class TestShortWindowAfterSTD:
             start, stop, config, state, inputs
         )
         
-        # Should have STD observation
+        # Should have STD observation — the 1-minute post-STD remainder
+        # is too short for an aux observation, so the STD row is extended
+        # to absorb it (no Free Time).
         std_rows = result[result["Target"].str.contains("STD", na=False)]
         assert len(std_rows) == 1
         assert std_rows.iloc[0]["Observation Start"] == start
-        assert std_rows.iloc[0]["Observation Stop"] == datetime(2026, 10, 1, 23, 2, 0)
+        assert std_rows.iloc[0]["Observation Stop"] == stop  # extended to end of gap
         
-        # Remaining 1 minute should be Free Time, not aux target
+        # No Free Time — the STD absorbed the short remainder
         free_rows = result[result["Target"] == "Free Time"]
-        assert len(free_rows) == 1
-        assert free_rows.iloc[0]["Observation Start"] == datetime(2026, 10, 1, 23, 2, 0)
-        assert free_rows.iloc[0]["Observation Stop"] == stop
+        assert len(free_rows) == 0
