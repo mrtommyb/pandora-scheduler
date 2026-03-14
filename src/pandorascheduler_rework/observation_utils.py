@@ -655,7 +655,7 @@ def save_observation_time_report(
                     and requested_hours_by_target[key] != value
                 ):
                     chosen = max(requested_hours_by_target[key], value)
-                    LOGGER.warning(
+                    LOGGER.info(
                         "Conflicting 'Number of Hours Requested' values for %r: %.2f vs %.2f; "
                         "using %.2f",
                         key,

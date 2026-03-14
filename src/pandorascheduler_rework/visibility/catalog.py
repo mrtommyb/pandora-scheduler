@@ -518,13 +518,13 @@ def _compute_planet_transits(
     if t_mjd.size == 0:
         return pd.DataFrame(
             {
-                col: np.array([], dtype=float)
-                for col in [
-                    "Transits",
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                ]
+                "Transits": np.array([], dtype=float),
+                "Transit_Start": np.array([], dtype=float),
+                "Transit_Stop": np.array([], dtype=float),
+                "Transit_Start_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Stop_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Coverage": np.array([], dtype=float),
+                "SAA_Overlap": np.array([], dtype=float),
             }
         )
 
@@ -540,13 +540,13 @@ def _compute_planet_transits(
         )
         return pd.DataFrame(
             {
-                col: np.array([], dtype=float)
-                for col in [
-                    "Transits",
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                ]
+                "Transits": np.array([], dtype=float),
+                "Transit_Start": np.array([], dtype=float),
+                "Transit_Stop": np.array([], dtype=float),
+                "Transit_Start_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Stop_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Coverage": np.array([], dtype=float),
+                "SAA_Overlap": np.array([], dtype=float),
             }
         )
 
@@ -582,13 +582,13 @@ def _compute_planet_transits(
         )
         return pd.DataFrame(
             {
-                col: np.array([], dtype=float)
-                for col in [
-                    "Transits",
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                ]
+                "Transits": np.array([], dtype=float),
+                "Transit_Start": np.array([], dtype=float),
+                "Transit_Stop": np.array([], dtype=float),
+                "Transit_Start_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Stop_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Coverage": np.array([], dtype=float),
+                "SAA_Overlap": np.array([], dtype=float),
             }
         )
 
@@ -608,13 +608,13 @@ def _compute_planet_transits(
     if not mid_transits_list:
         return pd.DataFrame(
             {
-                col: np.array([], dtype=float)
-                for col in [
-                    "Transits",
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                ]
+                "Transits": np.array([], dtype=float),
+                "Transit_Start": np.array([], dtype=float),
+                "Transit_Stop": np.array([], dtype=float),
+                "Transit_Start_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Stop_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Coverage": np.array([], dtype=float),
+                "SAA_Overlap": np.array([], dtype=float),
             }
         )
 
@@ -722,12 +722,6 @@ def _apply_transit_overlaps(
                 )
             df = read_parquet_cached(
                 str(planet_path),
-                columns=[
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                    "SAA_Overlap",
-                ],
             )
             if df is None:
                 raise FileNotFoundError(
