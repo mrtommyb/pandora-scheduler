@@ -775,7 +775,7 @@ def main() -> int:
         )
 
         obs_sequence_duration_min = int(_get_val("obs_sequence_duration_min", None, 90))
-        occ_sequence_limit_min = int(_get_val("occ_sequence_limit_min", None, 50))
+        occ_sequence_limit_min = int(_get_val("occ_sequence_limit_min", None, 20))
         min_sequence_minutes = int(_get_val("min_sequence_minutes", args.min_sequence_minutes, 8))
 
         std_obs_duration_hours = float(_get_val("std_obs_duration_hours", None, 0.5))
