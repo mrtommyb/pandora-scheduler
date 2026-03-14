@@ -998,15 +998,11 @@ def _schedule_auxiliary_target(
 
             std_label = f"{std_name} STD"
             scheduled_rows.append(
-<<<<<<< HEAD
-                [f"{std_name} STD", active_start, std_row_end, std_ra, std_dec]
-=======
-                [std_label, active_start, std_row_end, std_ra, std_dec, ""]
+                [std_label, active_start, std_row_end, std_ra, std_dec]
             )
             std_visible_duration_by_target[std_label] = (
                 std_visible_duration_by_target.get(std_label, timedelta())
                 + best_duration
->>>>>>> df013d5 (Address PR7 Copilot review feedback)
             )
             active_start = std_row_end
             state.last_std_obs = active_start
