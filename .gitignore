@@ -93,3 +93,4 @@ src/pandorascheduler/data/ToO_list.csv
 src/pandorascheduler/data/Deprioritized_Targets_*.json
 src/pandorascheduler/data/Non_Primary_Obs_Time_*.json
 src/pandorascheduler/scheduler_debug.log
+gmat/PAN-GMAT-COM-20260303-VF-20260303-EX-20270403-R001.txt
