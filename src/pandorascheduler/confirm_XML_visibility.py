@@ -1,281 +1,200 @@
-import os
-import xml.etree.ElementTree as ET
+#!/usr/bin/env python3
+"""Create per-visit visibility confirmation plots for a Pandora XML calendar."""
+
+from __future__ import annotations
+
+import argparse
 from datetime import datetime
+from pathlib import Path
+import xml.etree.ElementTree as ET
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
-import tqdm as tqdm
 from astropy.time import Time
+from tqdm import tqdm
 
-PACKAGEDIR = os.path.abspath(os.path.dirname(__file__))
 
-# Parse the XML file
-fname = f'{PACKAGEDIR}/data/Pandora_science_calendar.xml'
-tree = ET.parse(fname)
-root = tree.getroot()
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Generate per-visit XML visibility confirmation plots."
+    )
+    parser.add_argument(
+        "xml",
+        type=Path,
+        help="Path to Pandora_science_calendar.xml",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        required=True,
+        help="Run data directory containing targets/ and aux_targets/ visibility parquet files",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Directory for generated figures (default: <data-dir>/confirm_visibility)",
+    )
+    return parser.parse_args()
 
-aux_vis_path=f'{PACKAGEDIR}/data/aux_targets/'
-tar_vis_path=f'{PACKAGEDIR}/data/targets/'
 
-namespace = {'ns': '/pandora/calendar/'}
+def _resolve_visibility_df(data_dir: Path, target: str) -> pd.DataFrame:
+    targets_root = data_dir / "targets"
+    aux_root = data_dir / "aux_targets"
 
-# Function to check visibility
-def check_visibility(target, start_time, stop_time):
-    # Convert ISO time to MJD
-    start_mjd = Time(start_time, format='isot', scale='utc').mjd
-    stop_mjd = Time(stop_time, format='isot', scale='utc').mjd
+    star_name = target[:-1] if target.endswith(("b", "c", "d", "e", "f")) else target
+    candidate_paths = [
+        targets_root / star_name / f"Visibility for {star_name}.parquet",
+        aux_root / target / f"Visibility for {target}.parquet",
+    ]
 
-    # Read visibility data
+    for path in candidate_paths:
+        if path.exists():
+            return pd.read_parquet(path, columns=["Time(MJD_UTC)", "Visible"])
 
-    if target.endswith(('b', 'c', 'd', 'e', 'f')):
-        st_name = target[:-1]
-    else:
-        st_name = target
+    raise FileNotFoundError(f"No visibility parquet found for target {target}")
 
-    # st_name = target[:-2] if target.endswith('b') or target.endswith('c') else target
 
-    try:
-        v_data = pd.read_csv(tar_vis_path+f'{st_name}/Visibility for {st_name}.csv')
-    except:
-        v_data = pd.read_csv(aux_vis_path+f'{target}/Visibility for {target}.csv')
+def check_visibility(
+    data_dir: Path,
+    target: str,
+    start_time: str,
+    stop_time: str,
+) -> tuple[list[bool], list[datetime]]:
+    start_mjd = Time(start_time, format="isot", scale="utc").mjd
+    stop_mjd = Time(stop_time, format="isot", scale="utc").mjd
 
-    # if not target.startswith('DR3'):
-    #     v_data = pd.read_csv(tar_vis_path+f'{st_name}/Visibility for {st_name}.csv')
-    # else:
-    #     v_data = pd.read_csv(aux_vis_path+f'{target}/Visibility for {target}.csv')
+    v_data = _resolve_visibility_df(data_dir, target)
+    mask = (v_data["Time(MJD_UTC)"] >= start_mjd) & (v_data["Time(MJD_UTC)"] <= stop_mjd)
+    period_data = v_data.loc[mask]
 
-    # Filter data for the observation period
-    mask = (v_data['Time(MJD_UTC)'] >= start_mjd) & (v_data['Time(MJD_UTC)'] <= stop_mjd)
-    period_data = v_data[mask]
-    
-    return period_data['Visible'].tolist(), period_data['Time(MJD_UTC)'].tolist()
+    times = Time(
+        period_data["Time(MJD_UTC)"].to_numpy(dtype=float),
+        format="mjd",
+        scale="utc",
+    ).to_datetime()
+    times = [
+        (t.replace(tzinfo=None) if getattr(t, "tzinfo", None) is not None else t)
+        for t in times
+    ]
+    visibility = period_data["Visible"].to_numpy(dtype=float) >= 0.5
+    return visibility.tolist(), times
 
-# Function to create and save a figure for a visit
-def create_visit_figure(visit_data, visit_id, target):
-    import numpy as np
-    fig, ax = plt.subplots(figsize=(10, 5))
 
-    unique_targets = list(dict.fromkeys(d['target'] for d in visit_data))
+def create_visit_figure(
+    visit_data: list[dict[str, object]],
+    visit_id: str,
+    output_dir: Path,
+) -> None:
+    fig, ax = plt.subplots(figsize=(11, 5))
+
+    unique_targets = list(dict.fromkeys(str(d["target"]) for d in visit_data))
     target_to_y = {target: i for i, target in enumerate(unique_targets)}
 
-    # for data in visit_data:
-    for i, data in enumerate(visit_data):
-        visible_ = np.asarray(data['visibility']) == 1.
-        times = np.asarray(data['times'])
-        y_value = target_to_y[data['target']]
-        priority = data['priority']
-        if priority == '0':
-            color_ = 'gray'
-        elif priority == '1':
-            color_ = 'r'
-        elif priority == '2':
-            color_ = 'orange'
+    for data in visit_data:
+        target = str(data["target"])
+        times = np.asarray(data["times"], dtype=object)
+        visible = np.asarray(data["visibility"], dtype=bool)
+        y_value = target_to_y[target]
+        priority = str(data["priority"])
 
-        vis_times = data['times']
-        vis_values = [i+1 if v else None for v in data['visibility']]
-        # ax.scatter(vis_times, [y_value] * len(vis_times), color='green', marker='.', s=2)
-        ax.plot(times, [y_value] * len(times), color = color_, linewidth=1)
+        if priority == "2":
+            color = "orange"
+        elif priority == "1":
+            color = "red"
+        else:
+            color = "gray"
 
-        if not(all(visible_)):
-            for t in times[~visible_]:
-                ax.axvline(t, ymin=y_value/len(target_to_y), 
-                    ymax=(y_value+1)/len(target_to_y), 
-                    color='r', linewidth=1, alpha=1)
-            # vis_times = data['times']
-            # vis_values = [i+1 if v else None for v in data['visibility']]
-            # ax.scatter(vis_times, [i+1] * len(vis_times), c=vis_values, cmap='RdYlGn', vmin=0, vmax=1, s=3)
-        #     ax.scatter(times[visible_], [y_value] * np.sum(visible_), color='green', marker='.', s=2)
-        # else:
-        # Plot green points for visible times, red for invisible
-        # ax.scatter(times[visible_], [y_value] * np.sum(visible_), color='green', marker='.', s=2)
-            # ax.scatter(times[~visible_], [y_value] * np.sum(~visible_), color='red', marker='o', s=4)
+        if len(times) > 0:
+            ax.plot(times, np.full(len(times), y_value), color=color, linewidth=1)
 
+        if len(times) > 0 and not visible.all():
+            for t in times[~visible]:
+                ax.axvline(
+                    t,
+                    ymin=y_value / max(len(target_to_y), 1),
+                    ymax=(y_value + 1) / max(len(target_to_y), 1),
+                    color="red",
+                    linewidth=1,
+                    alpha=1,
+                )
 
-    # for i, data in enumerate(visit_data):
-    #     visible_ = np.asarray(data['visibility']) == 1.
-    #     times = np.linspace(data['start'], data['stop'], len(visible_))
-
-    #     # Plot green points for visible times, red for invisible
-    #     ax.scatter(times[visible_], [i] * np.sum(visible_), color='green', marker='.', s=2)
-    #     ax.scatter(times[~visible_], [i] * np.sum(~visible_), color='red', marker='o', s=4)
-
-    #     # if visible_:
-    #     #     color_ = 'green'
-    #     # else:
-    #     #     color_ = 'red'
-
-    #     # if all(data['visibility']):
-    #     #     color_ = 'green'
-    #     #     marker_ = 'o' 
-    #     #     ms_ = 2
-    #     # elif data['visibility']:
-    #     #     color_ = 'red'
-    #     #     marker_ = 'o' 
-    #     #     ms_ = 4
-    #     # else:
-    #     #     color_ = 'gray'
-    #     #     marker_ = 'x' 
-    #     #     ms_ = 8
-
-    #     # color_ = 'green' if all(data['visibility']) else 'red' if data['visibility'] else 'gray'
-
-    #     # ax.plot([data['start'], data['stop']], [i, i], color=color_, marker = 'o', ms = 2)
-        
-    #     # # Plot visibility
-    #     # if all(data['visibility']):
-    #     #     vis_times = data['times']
-    #     #     vis_values = [i+1 if v else None for v in data['visibility']]
-    #     #     ax.scatter(vis_times, [i+1] * len(vis_times), c=vis_values, cmap='RdYlGn', vmin=0, vmax=1, s=3)
-    #     #     # print(data['start'], data['stop'], all(data['visibility']))
-
-    # Set y-axis labels
     ax.set_yticks(range(len(unique_targets)))
     ax.set_yticklabels(unique_targets)
-
-    # Format x-axis
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M"))
     fig.autofmt_xdate()
-
-    plt.title(f'Target Visibility During Visit {visit_id}')
-    plt.xlabel('Time')
-    plt.ylabel('Target')
-
+    plt.title(f"Target Visibility During Visit {visit_id}")
+    plt.xlabel("Time")
+    plt.ylabel("Target")
     plt.tight_layout()
 
-    # Save the figure as a PNG file
-    try:
-        # output_file = os.path.join(output_dir, f'visit_{visit_id}_visibility_for_{target}.png')
-        output_file = os.path.join(output_dir, f'visit_{visit_id}_visibility.png')
-        plt.savefig(output_file, dpi=300, bbox_inches='tight')
-        plt.close(fig)
-        # print(f"Figure for Visit {visit_id} saved as {output_file}")
-    except:
-        no_fig = True
+    output_file = output_dir / f"visit_{visit_id}_visibility.png"
+    fig.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
-# Prepare output directory
-output_dir = PACKAGEDIR + '/data/confirm_visibility'
-if not os.path.exists(output_dir):
-    os.makedirs(output_dir)
 
-# Process each Visit
-for visit in tqdm.tqdm(root.findall('ns:Visit', namespace)):
-    visit_id = visit.find('ns:ID', namespace).text
-    visit_data = []
+def main() -> int:
+    args = parse_args()
+    xml_path = args.xml
+    data_dir = args.data_dir
+    output_dir = args.output_dir or (data_dir / "confirm_visibility")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    for obs_seq in visit.findall('ns:Observation_Sequence', namespace):
-        target_elem = obs_seq.find('./ns:Observational_Parameters/ns:Target', namespace)
-        target = target_elem.text if target_elem is not None and target_elem.text else "No target"
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+    namespace = {"ns": "/pandora/calendar/"}
 
-        priority = obs_seq.find('./ns:Observational_Parameters/ns:Priority', namespace).text
-        
-        start_elem = obs_seq.find('./ns:Observational_Parameters/ns:Timing/ns:Start', namespace)
-        stop_elem = obs_seq.find('./ns:Observational_Parameters/ns:Timing/ns:Stop', namespace)
-        
-        if start_elem is None or stop_elem is None:
-            print(f"Warning: Missing timing data for sequence in Visit {visit_id}")
+    for visit in tqdm(root.findall("ns:Visit", namespace), desc="Visits"):
+        visit_id_elem = visit.find("ns:ID", namespace)
+        if visit_id_elem is None or visit_id_elem.text is None:
             continue
-        
-        start_time = start_elem.text
-        stop_time = stop_elem.text
-        
-        if target != "No target":
-            try:
-                visibility, times = check_visibility(target, start_time, stop_time)
-            except Exception as e: 
-                print(f"Error checking visibility for target {target} in Visit {visit_id}: {str(e)}")
+        visit_id = visit_id_elem.text
+        visit_data: list[dict[str, object]] = []
+
+        for obs_seq in visit.findall("ns:Observation_Sequence", namespace):
+            target_elem = obs_seq.find("./ns:Observational_Parameters/ns:Target", namespace)
+            target = target_elem.text if target_elem is not None and target_elem.text else "No target"
+
+            priority_elem = obs_seq.find("./ns:Observational_Parameters/ns:Priority", namespace)
+            priority = priority_elem.text if priority_elem is not None and priority_elem.text else "0"
+
+            start_elem = obs_seq.find("./ns:Observational_Parameters/ns:Timing/ns:Start", namespace)
+            stop_elem = obs_seq.find("./ns:Observational_Parameters/ns:Timing/ns:Stop", namespace)
+            if start_elem is None or stop_elem is None:
+                print(f"Warning: Missing timing data for sequence in Visit {visit_id}")
+                continue
+
+            start_time = start_elem.text
+            stop_time = stop_elem.text
+            if not start_time or not stop_time:
+                continue
+
+            if target != "No target":
+                try:
+                    visibility, times = check_visibility(data_dir, target, start_time, stop_time)
+                except Exception as exc:
+                    print(f"Error checking visibility for target {target} in Visit {visit_id}: {exc}")
+                    visibility, times = [], []
+            else:
                 visibility, times = [], []
-        else:
-            visibility, times = [], []
-        
-        visit_data.append({
-            'target': target,
-            'priority': priority, 
-            'start': datetime.strptime(start_time, "%Y-%m-%dT%H:%M:%SZ"),
-            'stop': datetime.strptime(stop_time, "%Y-%m-%dT%H:%M:%SZ"),
-            'visibility': visibility,
-            'times': [Time(t, format='mjd').datetime for t in times]
-        })
 
-    try:
-        target#print(target)
-    except:
-        target = None#standard_ = True
-    # Create and save figure for this visit
-    create_visit_figure(visit_data, visit_id, target)
+            visit_data.append(
+                {
+                    "target": target,
+                    "priority": priority,
+                    "start": datetime.strptime(start_time, "%Y-%m-%dT%H:%M:%SZ"),
+                    "stop": datetime.strptime(stop_time, "%Y-%m-%dT%H:%M:%SZ"),
+                    "visibility": visibility,
+                    "times": times,
+                }
+            )
+
+        create_visit_figure(visit_data, visit_id, output_dir)
+
+    print(f"Saved figures to: {output_dir}")
+    return 0
 
 
-
-# # Prepare data for plotting
-# plot_data = []
-
-# for visit in root.findall('ns:Visit', namespace):
-#     for obs_seq in visit.findall('ns:Observation_Sequence', namespace):
-#         target_elem = obs_seq.find('./ns:Observational_Parameters/ns:Target', namespace)
-#         target = target_elem.text if target_elem is not None and target_elem.text else "No target"
-        
-#         start_elem = obs_seq.find('./ns:Observational_Parameters/ns:Timing/ns:Start', namespace)
-#         stop_elem = obs_seq.find('./ns:Observational_Parameters/ns:Timing/ns:Stop', namespace)
-
-#         print(target, start_elem.text, stop_elem.text)
-        
-#         if start_elem is None or stop_elem is None:
-#             print(f"Warning: Missing timing data for sequence {obs_seq.find('ns:ID', namespace).text}")
-#             continue
-        
-#         start_time = start_elem.text
-#         stop_time = stop_elem.text
-        
-#         if target != "No target":
-#             try:
-#                 visibility, times = check_visibility(target, start_time, stop_time)
-#             except Exception as e:
-#                 print(f"Error checking visibility for target {target}: {str(e)}")
-#                 visibility, times = [], []
-#         else:
-#             visibility, times = [], []
-        
-#         plot_data.append({
-#             'target': target,
-#             'start': datetime.strptime(start_time, "%Y-%m-%dT%H:%M:%SZ"),
-#             'stop': datetime.strptime(stop_time, "%Y-%m-%dT%H:%M:%SZ"),
-#             'visibility': visibility,
-#             'times': [Time(t, format='mjd').datetime for t in times]
-#         })
-
-# # Create the plot
-# fig, ax = plt.subplots(figsize=(15, 10))
-
-# for i, data in enumerate(plot_data):
-#     color = 'green' if all(data['visibility']) else 'red' if data['visibility'] else 'gray'
-#     ax.plot([data['start'], data['stop']], [i, i], color=color, linewidth=5)
-    
-#     # Plot visibility
-#     if data['visibility']:
-#         vis_times = data['times']
-#         vis_values = [i if v else None for v in data['visibility']]
-#         ax.scatter(vis_times, [i] * len(vis_times), c=vis_values, cmap='RdYlGn', vmin=0, vmax=1, s=20)
-
-# # Set y-axis labels
-# ax.set_yticks(range(len(plot_data)))
-# ax.set_yticklabels([d['target'] for d in plot_data])
-
-# # Format x-axis
-# ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
-# fig.autofmt_xdate()
-
-# plt.title('Target Visibility During Observation Sequences') 
-# plt.xlabel('Time') 
-# plt.ylabel('Targets')
-# plt.tight_layout()
-
-# #Save the figure as a PNG file
-# output_dir = PACKAGEDIR # Replace with your desired output directory 
-# if not os.path.exists(output_dir): 
-#     os.makedirs(output_dir)
-
-# output_file = os.path.join(output_dir, 'target_visibility.png') 
-# plt.savefig(output_file, dpi=300, bbox_inches='tight') 
-# plt.close(fig)
-
-# print(f"Figure saved as {output_file}")
+if __name__ == "__main__":
+    raise SystemExit(main())
