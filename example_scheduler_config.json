@@ -3,19 +3,19 @@
 
   "schedule_step_hours": 24.0,
   "transit_coverage_min": 0.4,
-  "min_visibility": 0.5,
+  "min_visibility": 0.4,
 
   "# Transit edge buffer parameters (pre/post transit)": null,
   "short_visit_threshold_hours": 12.0,
   "short_visit_edge_buffer_hours": 1.5,
   "long_visit_edge_buffer_hours": 4.0,
 
-  "transit_scheduling_weights": [0.8, 0.0, 0.2],
+  "transit_scheduling_weights": [0.9, 0.0, 0.1],
 
   "# XML / sequence generation options": null,
   "obs_sequence_duration_min": 90,
   "occ_sequence_limit_min": 50,
-  "min_sequence_minutes": 5,
+  "min_sequence_minutes": 10,
   "break_occultation_sequences": true,
 
   "# Standard observations (duration and cadence)": null,
@@ -29,12 +29,26 @@
   "prioritise_occultations_by_slew": false,
   "enable_occultation_xml": true,
   "enable_occultation_pass1": true,
-  "strict_occultation_time_limits": true,
+  "strict_occultation_time_limits": false,
+  "show_progress": true,
+  "parallel_workers": 13,
 
   "# Keepout / avoidance angles (degrees)": null,
   "visibility_sun_deg": 91.0,
-  "visibility_moon_deg": 25.0,
-  "visibility_earth_deg": 86.0,
+  "visibility_moon_deg": 20.0,
+  "visibility_earth_deg": 110.0,
+  "earth_avoidance_day_deg": 117.0,
+  "earth_avoidance_night_deg": 82.0,
+
+  "# Star tracker keepout angles (degrees)": null,
+  "st_sun_min_deg": 44.0,
+  "st_moon_min_deg": 20.0,
+  "st_earthlimb_min_deg": 32.0,
+  "st_required": 1,
+
+  "# Roll sweep configuration": null,
+  "roll_step_deg": 5.0,
+  "min_power_frac": 0.7,
 
   "# Other scheduling thresholds": null,
   "commissioning_days": 0,
