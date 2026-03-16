@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Render a priority-grouped Gantt-style figure from a Pandora science calendar XML."""
+"""Create windowed priority Gantt plots from a Pandora science calendar XML."""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from astropy.time import Time
@@ -17,38 +17,31 @@ from matplotlib.patches import Patch, Rectangle
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create a Gantt-style timeline figure from a Pandora XML calendar."
+        description="Create windowed priority Gantt plots from a Pandora XML calendar."
+    )
+    parser.add_argument("xml", type=Path, help="Path to Pandora_science_calendar.xml")
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=Path("output_directory/confirm_visibility"),
+        help="Directory for saved PNGs",
     )
     parser.add_argument(
-        "xml",
-        type=Path,
-        help="Path to Pandora_science_calendar.xml",
-    )
-    parser.add_argument(
-        "--out",
-        type=Path,
-        help="Optional output PNG path. If omitted, the figure is shown interactively.",
+        "--window-days",
+        type=float,
+        default=4.0,
+        help="Width of each time window in days",
     )
     parser.add_argument(
         "--title",
         type=str,
         default="Schedule by Priority",
-        help="Plot title",
-    )
-    parser.add_argument(
-        "--window-days",
-        type=float,
-        help="Optional time window size in days. If set, create multiple windowed PNGs in --out-dir.",
-    )
-    parser.add_argument(
-        "--out-dir",
-        type=Path,
-        help="Directory for windowed PNGs when --window-days is set.",
+        help="Base plot title",
     )
     parser.add_argument(
         "--show-sequence-labels",
         action="store_true",
-        help="Draw sequence ID / priority labels inside sufficiently long bars.",
+        help="Draw sequence ID / priority labels inside sufficiently long bars",
     )
     return parser.parse_args()
 
@@ -83,7 +76,7 @@ def parse_calendar(xml_path: Path) -> pd.DataFrame:
             if params is None:
                 continue
             target = params.findtext(target_tag, default="Unknown", namespaces=ns)
-            priority = params.findtext(priority_tag, default="0", namespaces=ns)
+            priority_text = params.findtext(priority_tag, default="0", namespaces=ns)
             timing = params.find(timing_tag, ns)
             if timing is None:
                 continue
@@ -92,25 +85,25 @@ def parse_calendar(xml_path: Path) -> pd.DataFrame:
             if not start_text or not stop_text:
                 continue
 
+            start_dt = pd.to_datetime(start_text, utc=True).tz_convert(None)
+            stop_dt = pd.to_datetime(stop_text, utc=True).tz_convert(None)
             rows.append(
                 {
-                    "visitid": visit_id,
-                    "seqid": seq_id,
-                    "target": target,
-                    "priority": int(float(priority)),
+                    "visitid": str(visit_id),
+                    "seqid": str(seq_id),
+                    "target": str(target),
+                    "priority": int(float(priority_text)),
+                    "start_dt": start_dt,
+                    "stop_dt": stop_dt,
+                    "duration_hours": (stop_dt - start_dt).total_seconds() / 3600.0,
                     "start_jd": Time(start_text).jd,
                     "stop_jd": Time(stop_text).jd,
-                    "start_dt": pd.to_datetime(start_text),
-                    "stop_dt": pd.to_datetime(stop_text),
-                    "start_text": start_text,
-                    "stop_text": stop_text,
                 }
             )
 
     if not rows:
         raise ValueError(f"No observation sequences found in XML: {xml_path}")
-
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows).sort_values(["start_dt", "visitid", "seqid"]).reset_index(drop=True)
 
 
 def _priority_color(priority: int) -> str | tuple[float, float, float]:
@@ -153,19 +146,20 @@ def _format_time_axis(ax: plt.Axes, df: pd.DataFrame) -> None:
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
 
 
-def build_figure(
+def build_priority_figure(
     df: pd.DataFrame,
     title: str,
     show_sequence_labels: bool = False,
+    figsize: tuple[float, float] = (20, 10),
 ) -> plt.Figure:
-    fig, ax = plt.subplots(figsize=(20, 10))
+    fig, ax = plt.subplots(figsize=figsize)
     fig.set_dpi(100)
 
     y_pos = 0.0
     y_positions: list[float] = []
     y_labels: list[str] = []
-    visit_info: list[tuple[str, float, str, int]] = []
-    visit_ids = list(dict.fromkeys(df["visitid"].tolist()))
+    visit_boundaries: list[tuple[float, float]] = []
+    visit_info: list[tuple[str, float, str]] = []
 
     for visit_id, visit_df in df.groupby("visitid", sort=False):
         visit_start_y = y_pos
@@ -178,25 +172,22 @@ def build_figure(
         for target, target_df in target_groups:
             for _, row in target_df.iterrows():
                 start_num = float(mdates.date2num(row["start_dt"].to_pydatetime()))
-                width = max(
-                    float(mdates.date2num(row["stop_dt"].to_pydatetime()) - start_num),
-                    1.0 / (24.0 * 60.0),
-                )
+                width = row["duration_hours"] / 24.0
                 rect = Rectangle(
                     (start_num, y_pos - 0.35),
                     width,
                     0.7,
                     facecolor=_priority_color(int(row["priority"])),
-                    alpha=1.0,
                     edgecolor="none",
                     linewidth=0,
+                    alpha=1.0,
                 )
                 ax.add_patch(rect)
 
-                duration_hours = (row["stop_dt"] - row["start_dt"]).total_seconds() / 3600.0
-                if show_sequence_labels and duration_hours > 0.5:
+                if show_sequence_labels and row["duration_hours"] > 0.5:
+                    mid_time = start_num + width / 2.0
                     ax.text(
-                        start_num + width / 2.0,
+                        mid_time,
                         y_pos,
                         f"{row['seqid']}\nP{int(row['priority'])}",
                         ha="center",
@@ -218,38 +209,32 @@ def build_figure(
             y_pos += 1.0
 
         visit_end_y = y_pos - 1.0
+        visit_boundaries.append((visit_start_y, visit_end_y))
         priority_counts = (
             visit_df["priority"].astype(int).value_counts().sort_index().to_dict()
         )
         summary = ", ".join(f"P{p}:{c}" for p, c in priority_counts.items())
-        visit_info.append((str(visit_id), (visit_start_y + visit_end_y) / 2.0, summary, len(visit_df)))
+        visit_info.append((str(visit_id), (visit_start_y + visit_end_y) / 2.0, summary))
 
-        if visit_id != visit_ids[-1]:
+        if visit_id != df["visitid"].iloc[-1]:
             ax.axhline(y=y_pos - 0.5, color="black", linewidth=2, alpha=0.7)
         y_pos += 0.2
 
-    ax.set(
-        xlabel="UTC Time",
-        yticks=y_positions,
-        yticklabels=y_labels,
-        ylabel="Targets (grouped by visit)",
-        title=title,
-    )
-    ax.grid(axis="x", color="#cbd5e1", alpha=0.6, linewidth=0.8)
-    ax.grid(axis="y", visible=False)
-    ax.set_axisbelow(True)
-    ax.tick_params(axis="y", labelsize=9)
-    ax.tick_params(axis="x", labelsize=9)
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(y_labels, fontsize=9)
     ax.set_ylim(-0.5, max(y_pos - 0.7, 0.5))
-    _format_time_axis(ax, df)
+    ax.grid(True, axis="x", alpha=0.3)
+    ax.grid(False, axis="y")
+    ax.set_ylabel("Targets (grouped by visit)", fontsize=12)
+    ax.set_title(title, fontsize=14, pad=10)
 
     norm = max(y_pos - 0.7, 1.0)
-    for idx, (visit_id, mid_y, summary, nseq) in enumerate(visit_info):
+    for idx, (visit_id, mid_y, summary) in enumerate(visit_info):
         x_offset = 1.05 + (idx % 2) * 0.12
         ax.text(
             x_offset,
             mid_y / norm,
-            f"Visit {visit_id}\n({nseq} seq)\n{summary}",
+            f"Visit {visit_id}\n({int((df['visitid'] == visit_id).sum())} seq)\n{summary}",
             transform=ax.transAxes,
             ha="left",
             va="center",
@@ -258,6 +243,7 @@ def build_figure(
             bbox={"boxstyle": "round,pad=0.3", "facecolor": "lightblue", "alpha": 0.7},
         )
 
+    _format_time_axis(ax, df)
     legend_priorities = sorted(int(p) for p in df["priority"].unique())
     handles = [
         Patch(facecolor=_priority_color(priority), alpha=1.0, label=f"Priority {priority}")
@@ -288,30 +274,24 @@ def _windowed_frames(df: pd.DataFrame, window_days: float) -> list[tuple[pd.Time
 def main() -> int:
     args = parse_args()
     df = parse_calendar(args.xml)
-    if args.window_days is not None:
-        out_dir = args.out_dir or (
-            args.out.parent if args.out is not None else Path("output_directory/confirm_visibility")
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+
+    windows = _windowed_frames(df, args.window_days)
+    for index, (start, end, window_df) in enumerate(windows):
+        title = (
+            f"{args.title} - Window {index + 1} "
+            f"({start.strftime('%m/%d')} to {end.strftime('%m/%d')})"
         )
-        out_dir.mkdir(parents=True, exist_ok=True)
-        windows = _windowed_frames(df, args.window_days)
-        for index, (start, end, window_df) in enumerate(windows):
-            fig = build_figure(
-                window_df,
-                f"{args.title} - Window {index + 1} ({start.strftime('%m/%d')} to {end.strftime('%m/%d')})",
-                show_sequence_labels=args.show_sequence_labels,
-            )
-            out_path = out_dir / f"gantt_plot_window_{index}.png"
-            fig.savefig(out_path, dpi=200, bbox_inches="tight")
-            plt.close(fig)
-            print(f"Saved figure: {out_path}")
-    else:
-        fig = build_figure(df, args.title, show_sequence_labels=args.show_sequence_labels)
-        if args.out is not None:
-            args.out.parent.mkdir(parents=True, exist_ok=True)
-            fig.savefig(args.out, dpi=200, bbox_inches="tight")
-            print(f"Saved figure: {args.out}")
-        else:
-            plt.show()
+        fig = build_priority_figure(
+            window_df,
+            title=title,
+            show_sequence_labels=args.show_sequence_labels,
+            figsize=(20, 10),
+        )
+        out_path = args.out_dir / f"gantt_plot_window_{index}.png"
+        fig.savefig(out_path, dpi=200, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Saved {out_path}")
     return 0
 
 
