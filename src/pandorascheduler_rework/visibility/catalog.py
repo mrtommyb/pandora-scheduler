@@ -84,6 +84,17 @@ def _write_visibility_parquet(
     config: PandoraSchedulerConfig,
 ) -> None:
     """Write *df* to parquet with keepout-angle metadata in the schema."""
+    if not config.parquet_optimization:
+        df.to_parquet(
+            path_or_buf,
+            index=False,
+            engine="pyarrow",
+            compression="snappy",
+            write_statistics=False,
+            use_dictionary=False,
+        )
+        return
+
     table = pa.Table.from_pandas(_optimise_visibility_dtypes(df), preserve_index=False)
     existing = table.schema.metadata or {}
     existing.update(

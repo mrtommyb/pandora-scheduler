@@ -220,6 +220,14 @@ class PandoraSchedulerConfig:
     N  = use exactly N worker processes.
     """
 
+    parquet_optimization: bool = False
+    """Enable smaller, more compressed visibility parquet outputs.
+
+    When False, preserve the baseline parquet writing behavior.
+    When True, downcast selected non-time columns and write with ``zstd``
+    compression to reduce file size.
+    """
+
     # ============================================================================
     # LEGACY COMPATIBILITY
     # ============================================================================

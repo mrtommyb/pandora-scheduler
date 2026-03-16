@@ -32,6 +32,7 @@
   "strict_occultation_time_limits": false,
   "show_progress": true,
   "parallel_workers": 13,
+  "parquet_optimization": true,
 
   "# Keepout / avoidance angles (degrees)": null,
   "visibility_sun_deg": 91.0,

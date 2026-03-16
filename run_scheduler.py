@@ -331,6 +331,11 @@ def parse_args() -> argparse.Namespace:
             "0 = auto (all CPUs), 1 = serial. (default: 0)"
         ),
     )
+    parser.add_argument(
+        "--parquet-optimization",
+        action="store_true",
+        help="Enable smaller, more compressed visibility parquet outputs",
+    )
 
     return parser.parse_args()
 
@@ -832,6 +837,10 @@ def main() -> int:
         parallel_workers = int(
             _get_val("parallel_workers", args.parallel_workers, 0)
         )
+        parquet_optimization = _as_bool(
+            _get_val("parquet_optimization", args.parquet_optimization, False),
+            False,
+        )
 
         aux_sort_key = str(_get_val("aux_sort_key", None, "sort_by_tdf_priority"))
         author = _get_val("author", None, None)
@@ -897,6 +906,7 @@ def main() -> int:
             strict_occultation_time_limits=strict_occultation_time_limits,
             use_legacy_mode=use_legacy_mode,
             parallel_workers=parallel_workers,
+            parquet_optimization=parquet_optimization,
             # Sorting / metadata
             aux_sort_key=aux_sort_key,
             author=author,
@@ -924,6 +934,7 @@ def main() -> int:
         logger.info("GENERATE_OCCULTATION_XML=%s", str(enable_occultation_xml).upper())
         logger.info("OCCULTATION_PASS1=%s", str(enable_occultation_pass1).upper())
         logger.info("STRICT_OCCULTATION_TIME_LIMITS=%s", str(strict_occultation_time_limits).upper())
+        logger.info("PARQUET_OPTIMIZATION=%s", str(parquet_optimization).upper())
         logger.info("Starting scheduler pipeline...")
         if args.legacy_mode:
             logger.info("Legacy mode enabled - using MJD-based visibility filtering")
