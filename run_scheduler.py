@@ -944,6 +944,7 @@ def main() -> int:
             xml_path = generate_science_calendar(
                 inputs=inputs,
                 config=config,
+                output_path=output_dir / "Pandora_science_calendar.xml",
             )
             logger.info(f"Science calendar written to: {xml_path}")
 

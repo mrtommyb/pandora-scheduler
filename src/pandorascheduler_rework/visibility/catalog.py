@@ -647,17 +647,7 @@ def _compute_planet_transits(
         current = current + period
 
     if not mid_transits_list:
-        return pd.DataFrame(
-            {
-                col: np.array([], dtype=float)
-                for col in [
-                    "Transits",
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                ]
-            }
-        )
+        return _empty_planet_transit_df()
 
     mid_transits = Time(mid_transits_list)
     start_transits = mid_transits - transit_duration / 2.0
