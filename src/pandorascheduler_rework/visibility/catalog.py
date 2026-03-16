@@ -562,6 +562,19 @@ def _compute_planet_transits(
     star_metadata: dict[str, tuple[float, float]],
     observer_location: EarthLocation,
 ) -> pd.DataFrame:
+    def _empty_planet_transit_df() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "Transits": np.array([], dtype=np.int32),
+                "Transit_Start": np.array([], dtype=float),
+                "Transit_Stop": np.array([], dtype=float),
+                "Transit_Start_UTC": pd.to_datetime([]),
+                "Transit_Stop_UTC": pd.to_datetime([]),
+                "Transit_Coverage": np.array([], dtype=np.float32),
+                "SAA_Overlap": np.array([], dtype=np.float32),
+            }
+        )
+
     star_visibility = read_parquet_cached(
         str(star_visibility_path),
         columns=["Time(MJD_UTC)", "Visible", "SAA_Crossing"],
@@ -574,17 +587,7 @@ def _compute_planet_transits(
     visible_mask = star_visibility["Visible"].to_numpy(dtype=float)
 
     if t_mjd.size == 0:
-        return pd.DataFrame(
-            {
-                col: np.array([], dtype=float)
-                for col in [
-                    "Transits",
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                ]
-            }
-        )
+        return _empty_planet_transit_df()
 
     transit_duration = planet_row["Transit Duration (hrs)"]
     period_days = planet_row["Period (days)"]
@@ -596,17 +599,7 @@ def _compute_planet_transits(
             "Incomplete ephemeris for %s; skipping planet visibility",
             planet_name,
         )
-        return pd.DataFrame(
-            {
-                col: np.array([], dtype=float)
-                for col in [
-                    "Transits",
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                ]
-            }
-        )
+        return _empty_planet_transit_df()
 
     transit_duration = float(transit_duration) * u.hour
     period = float(period_days) * u.day
@@ -638,17 +631,7 @@ def _compute_planet_transits(
             "Non-positive period for %s; skipping planet visibility",
             planet_name,
         )
-        return pd.DataFrame(
-            {
-                col: np.array([], dtype=float)
-                for col in [
-                    "Transits",
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                ]
-            }
-        )
+        return _empty_planet_transit_df()
 
     min_start_epoch = epoch_mjd_utc - half_obs_width
     elapsed_days = (time_grid[0] - min_start_epoch).to(u.day)
