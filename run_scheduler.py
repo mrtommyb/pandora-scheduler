@@ -646,11 +646,13 @@ def main() -> int:
             ).lower()
             in {"1", "true", "yes", "y"}
         )
-        # `config` is not yet constructed here, so check the CLI/ENV visibility GMAT
+        # `config` is not yet constructed here, so validate the CLI/JSON inputs now.
         if generate_visibility and visibility_gmat is None:
-            logger.warning(
-                "Visibility generation requested but no GMAT ephemeris provided."
+            logger.error(
+                "Visibility generation requested but no GMAT ephemeris provided. "
+                "Supply --gmat-ephemeris or set extra_inputs.visibility_gmat in the JSON config."
             )
+            return 1
 
         # Build PandoraSchedulerConfig with the dataclass field names and types
         schedule_step_hours = float(

@@ -1074,6 +1074,26 @@ def _occultation_windows(
     if len(occ_starts) != len(occ_stops):
         raise ValueError("Occultation start/stop lists are mismatched")
 
+    # Defensive cleanup: visibility-change indexing at the end of a visit can
+    # otherwise produce a zero-length trailing interval, which later causes
+    # expensive but futile occultation target searches.
+    filtered_pairs = [
+        (start, stop)
+        for start, stop in zip(occ_starts, occ_stops)
+        if stop > start
+    ]
+    if len(filtered_pairs) != len(occ_starts):
+        LOGGER.info(
+            "%s..%s: dropped %d degenerate occultation interval(s)",
+            times[0],
+            times[-1],
+            len(occ_starts) - len(filtered_pairs),
+        )
+    if not filtered_pairs:
+        return [], [], changes
+
+    occ_starts = [start for start, _ in filtered_pairs]
+    occ_stops = [stop for _, stop in filtered_pairs]
     return occ_starts, occ_stops, changes
 
 

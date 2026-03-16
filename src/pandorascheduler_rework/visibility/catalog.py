@@ -695,13 +695,14 @@ def _apply_transit_overlaps(
             if not planet_path.exists():
                 all_have_overlap = False
                 break
-            # Quick check: just read the header line to see if Transit_Overlap exists
+            # Check parquet schema metadata instead of reading the binary file as
+            # text. This keeps reruns fast without relying on an invalid
+            # text-header shortcut for parquet files.
             try:
-                with open(planet_path, "r") as f:
-                    header = f.readline().strip()
-                    if "Transit_Overlap" not in header:
-                        all_have_overlap = False
-                        break
+                schema = pq.read_schema(planet_path)
+                if "Transit_Overlap" not in schema.names:
+                    all_have_overlap = False
+                    break
             except Exception:
                 all_have_overlap = False
                 break
