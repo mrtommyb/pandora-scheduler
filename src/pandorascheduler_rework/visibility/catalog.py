@@ -40,13 +40,51 @@ from .geometry import (
 LOGGER = logging.getLogger(__name__)
 
 
+def _optimise_visibility_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """Reduce parquet size without changing scheduling semantics.
+
+    Keep time columns at full precision, but downcast visibility diagnostics and
+    transit metrics to narrower dtypes that still preserve the required values.
+    """
+    optimised = df.copy()
+
+    float32_cols = [
+        "Earth_Sep",
+        "Moon_Sep",
+        "Sun_Sep",
+        "Roll_Deg",
+        "Transit_Coverage",
+        "SAA_Overlap",
+        "Transit_Overlap",
+    ]
+    for column in float32_cols:
+        if column in optimised.columns:
+            optimised[column] = pd.to_numeric(
+                optimised[column], errors="coerce"
+            ).astype(np.float32)
+
+    int8_cols = ["SAA_Crossing", "Visible", "N_ST_Pass"]
+    for column in int8_cols:
+        if column in optimised.columns:
+            optimised[column] = pd.to_numeric(
+                optimised[column], errors="coerce"
+            ).fillna(0).astype(np.int8)
+
+    if "Transits" in optimised.columns:
+        optimised["Transits"] = pd.to_numeric(
+            optimised["Transits"], errors="coerce"
+        ).fillna(-1).astype(np.int32)
+
+    return optimised
+
+
 def _write_visibility_parquet(
     df: pd.DataFrame,
     path_or_buf: Path | io.BytesIO,
     config: PandoraSchedulerConfig,
 ) -> None:
     """Write *df* to parquet with keepout-angle metadata in the schema."""
-    table = pa.Table.from_pandas(df, preserve_index=False)
+    table = pa.Table.from_pandas(_optimise_visibility_dtypes(df), preserve_index=False)
     existing = table.schema.metadata or {}
     existing.update(
         {
@@ -59,7 +97,7 @@ def _write_visibility_parquet(
     pq.write_table(
         table,
         path_or_buf,
-        compression="snappy",
+        compression="zstd",
         write_statistics=False,
         use_dictionary=False,
     )
@@ -477,13 +515,33 @@ def _build_planet_transits(
         planet_dir.mkdir(parents=True, exist_ok=True)
         planet_output = planet_dir / f"Visibility for {planet_name}.parquet"
         if planet_output.exists() and not config.force_regenerate:
-            LOGGER.info(
-                "Skipping %s/%s; planet visibility already exists",
-                star_name,
-                planet_name,
-            )
-            generated.append((star_name, planet_name))
-            continue
+            try:
+                existing_schema = pq.read_schema(planet_output)
+                required_planet_columns = {
+                    "Transit_Start",
+                    "Transit_Stop",
+                    "Transit_Coverage",
+                    "SAA_Overlap",
+                }
+                if required_planet_columns.issubset(existing_schema.names):
+                    LOGGER.info(
+                        "Skipping %s/%s; planet visibility already exists",
+                        star_name,
+                        planet_name,
+                    )
+                    generated.append((star_name, planet_name))
+                    continue
+                LOGGER.info(
+                    "Regenerating %s/%s; existing planet visibility is missing required columns",
+                    star_name,
+                    planet_name,
+                )
+            except Exception:
+                LOGGER.info(
+                    "Regenerating %s/%s; existing planet visibility schema could not be inspected",
+                    star_name,
+                    planet_name,
+                )
 
         planet_df = _compute_planet_transits(
             star_visibility_path,
