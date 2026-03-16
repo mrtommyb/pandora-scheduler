@@ -336,6 +336,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable smaller, more compressed visibility parquet outputs",
     )
+    parser.add_argument(
+        "--log-requested-hours-conflicts",
+        action="store_true",
+        help="Log warnings when requested-hours catalogs disagree for the same target",
+    )
 
     return parser.parse_args()
 
@@ -841,6 +846,14 @@ def main() -> int:
             _get_val("parquet_optimization", args.parquet_optimization, False),
             False,
         )
+        log_requested_hours_conflicts = _as_bool(
+            _get_val(
+                "log_requested_hours_conflicts",
+                args.log_requested_hours_conflicts,
+                False,
+            ),
+            False,
+        )
 
         aux_sort_key = str(_get_val("aux_sort_key", None, "sort_by_tdf_priority"))
         author = _get_val("author", None, None)
@@ -904,6 +917,7 @@ def main() -> int:
             enable_occultation_xml=enable_occultation_xml,
             enable_occultation_pass1=enable_occultation_pass1,
             strict_occultation_time_limits=strict_occultation_time_limits,
+            log_requested_hours_conflicts=log_requested_hours_conflicts,
             use_legacy_mode=use_legacy_mode,
             parallel_workers=parallel_workers,
             parquet_optimization=parquet_optimization,
@@ -934,6 +948,10 @@ def main() -> int:
         logger.info("GENERATE_OCCULTATION_XML=%s", str(enable_occultation_xml).upper())
         logger.info("OCCULTATION_PASS1=%s", str(enable_occultation_pass1).upper())
         logger.info("STRICT_OCCULTATION_TIME_LIMITS=%s", str(strict_occultation_time_limits).upper())
+        logger.info(
+            "LOG_REQUESTED_HOURS_CONFLICTS=%s",
+            str(log_requested_hours_conflicts).upper(),
+        )
         logger.info("PARQUET_OPTIMIZATION=%s", str(parquet_optimization).upper())
         logger.info("Starting scheduler pipeline...")
         if args.legacy_mode:

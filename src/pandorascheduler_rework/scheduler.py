@@ -516,6 +516,7 @@ def _write_observation_report(
         inputs.target_list,
         str(report_path),
         requested_hours_catalogs=requested_hours_catalogs,
+        log_requested_hours_conflicts=inputs.config.log_requested_hours_conflicts,
     )
     return report_path
 

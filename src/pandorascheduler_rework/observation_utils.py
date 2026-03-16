@@ -597,6 +597,7 @@ def save_observation_time_report(
     target_list: pd.DataFrame,
     output_path,
     requested_hours_catalogs: Sequence[Path] | None = None,
+    log_requested_hours_conflicts: bool = False,
 ):
     output_file = Path(output_path)
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -608,6 +609,7 @@ def save_observation_time_report(
 
     requested_hours_by_target: dict[str, float] = {}
     requested_hours_sources_by_target: dict[str, set[str]] = {}
+    conflicting_requested_hours_targets: set[str] = set()
     if requested_hours_catalogs:
         for catalog_path in requested_hours_catalogs:
             path = Path(catalog_path)
@@ -653,14 +655,16 @@ def save_observation_time_report(
                     and requested_hours_by_target[key] != value
                 ):
                     chosen = max(requested_hours_by_target[key], value)
-                    LOGGER.warning(
-                        "Conflicting 'Number of Hours Requested' values for %r: %.2f vs %.2f; "
-                        "using %.2f",
-                        key,
-                        requested_hours_by_target[key],
-                        value,
-                        chosen,
-                    )
+                    conflicting_requested_hours_targets.add(key)
+                    if log_requested_hours_conflicts:
+                        LOGGER.warning(
+                            "Conflicting 'Number of Hours Requested' values for %r: %.2f vs %.2f; "
+                            "using %.2f",
+                            key,
+                            requested_hours_by_target[key],
+                            value,
+                            chosen,
+                        )
                     requested_hours_by_target[key] = chosen
                 else:
                     requested_hours_by_target[key] = value
@@ -675,6 +679,13 @@ def save_observation_time_report(
                     target_name,
                     sources_str,
                 )
+
+        if conflicting_requested_hours_targets and not log_requested_hours_conflicts:
+            LOGGER.warning(
+                "%d targets had conflicting 'Number of Hours Requested' values; using max values. "
+                "Enable log_requested_hours_conflicts for per-target details.",
+                len(conflicting_requested_hours_targets),
+            )
 
     with output_file.open("w", encoding="utf-8") as handle:
         handle.write("Target,Is Primary,Hours Requested,Hours Scheduled,Hours Delta\n")

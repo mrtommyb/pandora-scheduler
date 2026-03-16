@@ -30,9 +30,10 @@
   "enable_occultation_xml": true,
   "enable_occultation_pass1": true,
   "strict_occultation_time_limits": false,
+  "log_requested_hours_conflicts": false,
   "show_progress": true,
   "parallel_workers": 13,
-  "parquet_optimization": true,
+  "parquet_optimization": false,
 
   "# Keepout / avoidance angles (degrees)": null,
   "visibility_sun_deg": 91.0,

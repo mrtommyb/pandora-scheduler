@@ -208,6 +208,13 @@ class PandoraSchedulerConfig:
     strict_occultation_time_limits: bool = True
     """When true, never schedule occultation targets beyond requested-hour limits."""
 
+    log_requested_hours_conflicts: bool = False
+    """Log warnings when requested-hours catalogs disagree for the same target.
+
+    Default is False to keep normal runs quiet. Enable when auditing catalog
+    quality or diagnosing requested-hours mismatches.
+    """
+
     # ============================================================================
     # PARALLELISM
     # ============================================================================
