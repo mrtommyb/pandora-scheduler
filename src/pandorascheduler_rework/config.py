@@ -205,8 +205,15 @@ class PandoraSchedulerConfig:
     enable_occultation_pass1: bool = True
     """Enable Pass 1 in occultation assignment (single target covers all intervals)."""
 
-    strict_occultation_time_limits: bool = True
-    """When true, never schedule occultation targets beyond requested-hour limits."""
+    requested_occ_time_override: bool = False
+    """Allow occultation scheduling to override requested-hours limits.
+
+    When False (default), requested-hours bookkeeping is treated as a hard
+    constraint and missing/incomplete data can block assignment.
+    When True, the scheduler can continue assigning occultation targets even
+    when requested-hours bookkeeping is incomplete or would otherwise block
+    assignment.
+    """
 
     log_requested_hours_conflicts: bool = False
     """Log warnings when requested-hours catalogs disagree for the same target.

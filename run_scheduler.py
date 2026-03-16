@@ -233,8 +233,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--weights",
         type=str,
-        default="0.8,0.0,0.2",
-        help="Schedule weights as comma-separated values: coverage,saa,schedule (default: 0.8,0.0,0.2)",
+        default=None,
+        help=(
+            "Schedule weights as comma-separated values: coverage,saa,schedule. "
+            "If omitted, use the JSON config value or the built-in default 0.8,0.0,0.2."
+        ),
     )
     parser.add_argument(
         "--min-visibility",
@@ -289,6 +292,14 @@ def parse_args() -> argparse.Namespace:
         "--relaxed-occultation-time-limits",
         action="store_true",
         help="Allow occultation scheduling to continue when time-limit data is incomplete",
+    )
+    parser.add_argument(
+        "--requested-occ-time-override",
+        action="store_true",
+        help=(
+            "Allow occultation scheduling to continue when requested-hours bookkeeping "
+            "is incomplete or would otherwise block assignment"
+        ),
     )
 
     # Profiling configuration
@@ -826,14 +837,21 @@ def main() -> int:
             ),
             True,
         )
-        strict_occultation_time_limits = _as_bool(
-            _get_val(
-                "strict_occultation_time_limits",
-                not args.relaxed_occultation_time_limits if args.relaxed_occultation_time_limits else None,
-                True,
+        requested_occ_time_override = _as_bool(
+            _get_any(
+                ["requested_occ_time_override"],
+                True if args.requested_occ_time_override else (
+                    True if args.relaxed_occultation_time_limits else None
+                ),
+                None,
             ),
-            True,
+            False,
         )
+        if "requested_occ_time_override" not in json_config and "strict_occultation_time_limits" in json_config:
+            requested_occ_time_override = not _as_bool(
+                json_config.get("strict_occultation_time_limits"),
+                True,
+            )
 
         commissioning_days = int(_get_val("commissioning_days", None, 0))
 
@@ -916,7 +934,7 @@ def main() -> int:
             prioritise_occultations_by_slew=prioritise_occultations_by_slew,
             enable_occultation_xml=enable_occultation_xml,
             enable_occultation_pass1=enable_occultation_pass1,
-            strict_occultation_time_limits=strict_occultation_time_limits,
+            requested_occ_time_override=requested_occ_time_override,
             log_requested_hours_conflicts=log_requested_hours_conflicts,
             use_legacy_mode=use_legacy_mode,
             parallel_workers=parallel_workers,
@@ -947,7 +965,10 @@ def main() -> int:
         logger.info("PRIMARY_ONLY_MODE=%s", str(primary_only_mode).upper())
         logger.info("GENERATE_OCCULTATION_XML=%s", str(enable_occultation_xml).upper())
         logger.info("OCCULTATION_PASS1=%s", str(enable_occultation_pass1).upper())
-        logger.info("STRICT_OCCULTATION_TIME_LIMITS=%s", str(strict_occultation_time_limits).upper())
+        logger.info(
+            "REQUESTED_OCC_TIME_OVERRIDE=%s",
+            str(requested_occ_time_override).upper(),
+        )
         logger.info(
             "LOG_REQUESTED_HOURS_CONFLICTS=%s",
             str(log_requested_hours_conflicts).upper(),
@@ -960,6 +981,13 @@ def main() -> int:
 
         # 4. Generate Science Calendar XML
         xml_path = None
+        conflict_count = int(
+            (result.diagnostics or {}).get("requested_hours_conflict_count", 0) or 0
+        )
+        emit_requested_hours_warning = (
+            conflict_count > 0 and not config.log_requested_hours_conflicts
+        )
+
         if not args.skip_xml and result.schedule_csv:
             # Use the same config object to create calendar settings
             # Ensure we point to the correct data directory (where manifests are)
@@ -975,7 +1003,19 @@ def main() -> int:
                 config=config,
                 output_path=output_dir / "Pandora_science_calendar.xml",
             )
+            if emit_requested_hours_warning:
+                logger.warning(
+                    "%d targets had conflicting 'Number of Hours Requested' values; using max values. "
+                    "Enable log_requested_hours_conflicts for per-target details.",
+                    conflict_count,
+                )
             logger.info(f"Science calendar written to: {xml_path}")
+        elif emit_requested_hours_warning:
+            logger.warning(
+                "%d targets had conflicting 'Number of Hours Requested' values; using max values. "
+                "Enable log_requested_hours_conflicts for per-target details.",
+                conflict_count,
+            )
 
         # 5. Print Summary
         print_summary(result, xml_path)

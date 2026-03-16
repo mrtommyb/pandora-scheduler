@@ -199,6 +199,7 @@ def build_schedule(config: PandoraSchedulerConfig) -> SchedulerResult:
     diagnostics: Dict[str, Any] = {
         "schedule_dataframe": outputs.schedule,
         "tracker_dataframe": outputs.tracker,
+        "requested_hours_conflict_count": outputs.requested_hours_conflict_count,
     }
 
     return SchedulerResult(
@@ -436,5 +437,4 @@ def _as_bool(value: object, default: bool) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     return default
-
 

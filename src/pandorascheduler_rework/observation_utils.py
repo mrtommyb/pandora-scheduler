@@ -598,7 +598,7 @@ def save_observation_time_report(
     output_path,
     requested_hours_catalogs: Sequence[Path] | None = None,
     log_requested_hours_conflicts: bool = False,
-):
+) -> tuple[Path, int]:
     output_file = Path(output_path)
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -680,13 +680,6 @@ def save_observation_time_report(
                     sources_str,
                 )
 
-        if conflicting_requested_hours_targets and not log_requested_hours_conflicts:
-            LOGGER.warning(
-                "%d targets had conflicting 'Number of Hours Requested' values; using max values. "
-                "Enable log_requested_hours_conflicts for per-target details.",
-                len(conflicting_requested_hours_targets),
-            )
-
     with output_file.open("w", encoding="utf-8") as handle:
         handle.write("Target,Is Primary,Hours Requested,Hours Scheduled,Hours Delta\n")
         for target, duration in all_target_obs_time.items():
@@ -718,7 +711,7 @@ def save_observation_time_report(
                 f"{label},{is_primary},{requested:.2f},{hours:.2f},{delta:.2f}\n"
             )
 
-    return output_file
+    return output_file, len(conflicting_requested_hours_targets)
 
 
 def check_if_transits_in_obs_window(

@@ -103,14 +103,14 @@ class _ScienceCalendarBuilder:
 
         Looks up 'Number of Hours Requested' from the occultation manifest.
 
-        When ``strict_occultation_time_limits`` is True (default), raises
+        When ``requested_occ_time_override`` is False (default), raises
         ValueError if the catalog is missing, the target is not found, or
         the required column is missing.
 
-        When strict mode is disabled, logs a warning and returns a very large
+        When the override is enabled, logs a warning and returns a very large
         effective limit so scheduling can continue.
         """
-        strict = self.config.strict_occultation_time_limits
+        enforce_requested_hours = not self.config.requested_occ_time_override
         _RELAXED_FALLBACK = timedelta(hours=1_000_000)
 
         if self.occ_catalog is None or self.occ_catalog.empty:
@@ -118,7 +118,7 @@ class _ScienceCalendarBuilder:
                 f"Cannot get time limit for occultation target '{target_name}': "
                 "occultation catalog is not loaded"
             )
-            if strict:
+            if enforce_requested_hours:
                 raise ValueError(msg)
             LOGGER.warning("%s — using unlimited fallback", msg)
             return _RELAXED_FALLBACK
@@ -126,7 +126,7 @@ class _ScienceCalendarBuilder:
         match = self.occ_catalog[self.occ_catalog["Star Name"] == target_name]
         if match.empty:
             msg = f"Occultation target '{target_name}' not found in catalog"
-            if strict:
+            if enforce_requested_hours:
                 raise ValueError(msg)
             LOGGER.warning("%s — using unlimited fallback", msg)
             return _RELAXED_FALLBACK
@@ -136,7 +136,7 @@ class _ScienceCalendarBuilder:
                 "Occultation catalog is missing required 'Number of Hours Requested' "
                 "column"
             )
-            if strict:
+            if enforce_requested_hours:
                 raise ValueError(msg)
             LOGGER.warning("%s — using unlimited fallback", msg)
             return _RELAXED_FALLBACK
@@ -147,7 +147,7 @@ class _ScienceCalendarBuilder:
                 f"Occultation target '{target_name}' has missing "
                 "'Number of Hours Requested' value"
             )
-            if strict:
+            if enforce_requested_hours:
                 raise ValueError(msg)
             LOGGER.warning("%s — using unlimited fallback", msg)
             return _RELAXED_FALLBACK

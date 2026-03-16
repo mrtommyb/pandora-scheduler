@@ -29,7 +29,7 @@
   "prioritise_occultations_by_slew": false,
   "enable_occultation_xml": true,
   "enable_occultation_pass1": true,
-  "strict_occultation_time_limits": false,
+  "requested_occ_time_override": true,
   "log_requested_hours_conflicts": false,
   "show_progress": true,
   "parallel_workers": 13,

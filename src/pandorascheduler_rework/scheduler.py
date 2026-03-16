@@ -151,6 +151,7 @@ class SchedulerOutputs:
     schedule_path: Optional[Path]
     tracker_csv_path: Optional[Path]
     tracker_pickle_path: Optional[Path]
+    requested_hours_conflict_count: int = 0
 
 
 def run_scheduler(
@@ -335,10 +336,11 @@ def run_scheduler(
     ]
     schedule = schedule.reindex(columns=column_order)
 
-    observation_report_path = _write_observation_report(
+    observation_report_path, requested_hours_conflict_count = _write_observation_report(
         inputs,
         state,
         pandora_start,
+        config,
     )
     schedule_path, tracker_csv_path, tracker_pickle_path = _persist_outputs(
         schedule,
@@ -357,6 +359,7 @@ def run_scheduler(
         schedule=schedule,
         tracker=state.tracker,
         observation_report_path=observation_report_path,
+        requested_hours_conflict_count=requested_hours_conflict_count,
         schedule_path=schedule_path,
         tracker_csv_path=tracker_csv_path,
         tracker_pickle_path=tracker_pickle_path,
@@ -500,8 +503,11 @@ def _initialize_tracker(
 
 
 def _write_observation_report(
-    inputs: SchedulerInputs, state: SchedulerState, pandora_start: datetime
-) -> Path:
+    inputs: SchedulerInputs,
+    state: SchedulerState,
+    pandora_start: datetime,
+    config: PandoraSchedulerConfig,
+) -> tuple[Path, int]:
     report_name = f"Observation_Time_Report_{pandora_start}.csv"
     report_path = inputs.output_dir / report_name
     requested_hours_catalogs: list[Path] = []
@@ -511,14 +517,13 @@ def _write_observation_report(
         if manifest_path.exists():
             requested_hours_catalogs.append(manifest_path)
 
-    observation_utils.save_observation_time_report(
+    return observation_utils.save_observation_time_report(
         state.all_target_obs_time,
         inputs.target_list,
         str(report_path),
         requested_hours_catalogs=requested_hours_catalogs,
-        log_requested_hours_conflicts=inputs.config.log_requested_hours_conflicts,
+        log_requested_hours_conflicts=config.log_requested_hours_conflicts,
     )
-    return report_path
 
 
 def _persist_outputs(
