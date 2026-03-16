@@ -154,6 +154,129 @@ class _ScienceCalendarBuilder:
 
         return timedelta(hours=float(hours_req))
 
+    def _next_chunk_end(
+        self, current: datetime, step: timedelta, segment_stop: datetime
+    ) -> datetime:
+        """Compute the end of the next chunk, absorbing a short tail.
+
+        If emitting a chunk of *step* would leave a remainder shorter than
+        ``min_sequence_minutes``, extend this chunk to *segment_stop* so
+        no short trailing sequence is created.
+        """
+        candidate = min(current + step, segment_stop)
+        if candidate >= segment_stop:
+            return segment_stop
+        remainder = segment_stop - candidate
+        if remainder < timedelta(minutes=self.config.min_sequence_minutes):
+            return segment_stop
+        return candidate
+
+    def _occ_chunk_end(
+        self, current: datetime, segment_stop: datetime
+    ) -> datetime:
+        """Occultation-aware chunk end, respecting break_occultation_sequences."""
+        if self.config.break_occultation_sequences:
+            return self._next_chunk_end(
+                current, self.occultation_limit, segment_stop
+            )
+        return segment_stop
+
+    @staticmethod
+    def _iterate_segments(
+        augmented_changes: List[int],
+        visit_times: List[datetime],
+        visibility_flags: List[int],
+        start: datetime,
+        final_time: datetime,
+    ):
+        """Yield ``(segment_start, segment_stop, is_visible)`` for each
+        visibility-change segment within a visit."""
+        last = len(augmented_changes) - 1
+        for pos, change_idx in enumerate(augmented_changes):
+            seg_start = (
+                start if pos == 0
+                else visit_times[augmented_changes[pos - 1] + 1]
+            )
+            seg_stop = (
+                final_time if pos == last
+                else visit_times[change_idx + 1]
+            )
+            yield seg_start, seg_stop, bool(visibility_flags[change_idx])
+
+    def _emit_science_sequences(
+        self,
+        visit_element: ET.Element,
+        seq_counter: int,
+        target_name: str,
+        segment_start: datetime,
+        segment_stop: datetime,
+        ra_value: float,
+        dec_value: float,
+        target_info: Optional[pd.DataFrame],
+        priority_flag: bool,
+        transit_start: Sequence[datetime],
+        transit_stop: Sequence[datetime],
+    ) -> int:
+        """Emit chunked science observation sequences.  Returns updated
+        *seq_counter*."""
+        current = segment_start
+        while current < segment_stop:
+            next_value = self._next_chunk_end(
+                current, self.sequence_duration, segment_stop
+            )
+            priority = _target_priority(
+                priority_flag, transit_start, transit_stop, current, next_value,
+            )
+            observation_sequence(
+                visit_element,
+                f"{seq_counter:03d}",
+                target_name,
+                priority,
+                current.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                ra_value,
+                dec_value,
+                target_info if target_info is not None else pd.DataFrame(),
+            )
+            seq_counter += 1
+            current = next_value
+        return seq_counter
+
+    def _emit_occultation_sequences(
+        self,
+        visit_element: ET.Element,
+        seq_counter: int,
+        occ_target: str,
+        segment_start: datetime,
+        segment_stop: datetime,
+        ra_occ: float,
+        dec_occ: float,
+        occ_info: Optional[pd.DataFrame],
+    ) -> int:
+        """Emit chunked occultation observation sequences.  Returns updated
+        *seq_counter*."""
+        current = segment_start
+        while current < segment_stop:
+            next_value = self._occ_chunk_end(current, segment_stop)
+            observation_sequence(
+                visit_element,
+                f"{seq_counter:03d}",
+                occ_target,
+                "0",
+                current.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                ra_occ,
+                dec_occ,
+                occ_info if occ_info is not None else pd.DataFrame(),
+            )
+            self.occultation_obs_time[occ_target] = (
+                self.occultation_obs_time.get(occ_target, timedelta())
+                + (next_value - current)
+            )
+            seq_counter += 1
+            current = next_value
+        return seq_counter
+
     def build_calendar(self) -> ET.Element:
         root = ET.Element("ScienceCalendar", xmlns="/pandora/calendar/")
         self._add_meta(root)
@@ -326,7 +449,10 @@ class _ScienceCalendarBuilder:
                 return
 
         visibility_changes = _visibility_change_indices(visibility_flags)
-        final_time = visit_times[-1]
+        # Use the CSV stop boundary (not visit_times[-1]) so the XML visit
+        # spans the full scheduled window and no 1-minute inter-visit gap
+        # is introduced by visibility-sample rounding.
+        final_time = stop
         seq_counter = 1
 
         if not visibility_changes:
@@ -350,198 +476,66 @@ class _ScienceCalendarBuilder:
             visibility_changes,
         )
 
+        # --- Path 1: occultation XML disabled — science-only ---------------
         if not self.config.enable_occultation_xml:
-            # Occultation XML disabled — emit only the visible segments.
-            seq_counter = 1
-            for change_position, change_idx in enumerate(augmented_changes):
-                if change_position == 0:
-                    segment_start = visit_times[0]
-                else:
-                    segment_start = visit_times[augmented_changes[change_position - 1] + 1]
-                segment_stop = visit_times[change_idx + 1]
-                is_visible = bool(visibility_flags[change_idx])
-                if not is_visible:
-                    continue
-                current = segment_start
-                while current < segment_stop:
-                    next_value = min(current + self.sequence_duration, segment_stop)
-                    priority = _target_priority(
-                        priority_flag, transit_start, transit_stop, current, next_value,
+            for seg_start, seg_stop, is_visible in self._iterate_segments(
+                augmented_changes, visit_times, visibility_flags, start, final_time,
+            ):
+                if is_visible:
+                    seq_counter = self._emit_science_sequences(
+                        visit_element, seq_counter, target_name,
+                        seg_start, seg_stop, ra_value, dec_value,
+                        target_info, priority_flag, transit_start, transit_stop,
                     )
-                    observation_sequence(
-                        visit_element,
-                        f"{seq_counter:03d}",
-                        target_name,
-                        priority,
-                        current.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        ra_value,
-                        dec_value,
-                        target_info if target_info is not None else pd.DataFrame(),
-                    )
-                    seq_counter += 1
-                    current = next_value
             return
 
+        # --- Resolve the occultation source for this visit ------------------
         occultation_info = self._find_occultation_target(
-            oc_starts,
-            oc_stops,
-            start,
-            final_time,
-            ra_value,
-            dec_value,
+            oc_starts, oc_stops, start, final_time, ra_value, dec_value,
         )
-        if occultation_info is None:
+
+        # Determine whether we have a scheduled occ_df or need a fallback.
+        occ_df: Optional[pd.DataFrame] = None
+        fallback_occultation: Optional[
+            tuple[str, float, float, Optional[pd.DataFrame]]
+        ] = None
+
+        if occultation_info is not None:
+            occ_df, scheduled = occultation_info
+            if not scheduled or occ_df is None:
+                occ_df = None
+
+        if occ_df is None:
             LOGGER.warning(
                 "Unable to schedule occultation target for %s between %s and %s",
-                target_name,
-                start,
-                final_time,
+                target_name, start, final_time,
             )
             fallback_occultation = self._select_fallback_occultation_target(
-                ra_value,
-                dec_value,
+                ra_value, dec_value,
             )
-            seq_counter = 1
-            for change_position, change_idx in enumerate(augmented_changes):
-                if change_position == 0:
-                    segment_start = visit_times[0]
-                else:
-                    segment_start = visit_times[augmented_changes[change_position - 1] + 1]
-                segment_stop = visit_times[change_idx + 1]
-                is_visible = bool(visibility_flags[change_idx])
+
+        # --- Path 2: catalog-fallback occultation (no occ_df) ---------------
+        if occ_df is None:
+            for seg_start, seg_stop, is_visible in self._iterate_segments(
+                augmented_changes, visit_times, visibility_flags, start, final_time,
+            ):
                 if is_visible:
-                    current = segment_start
-                    while current < segment_stop:
-                        next_value = min(current + self.sequence_duration, segment_stop)
-                        priority = _target_priority(
-                            priority_flag,
-                            transit_start,
-                            transit_stop,
-                            current,
-                            next_value,
-                        )
-                        observation_sequence(
-                            visit_element,
-                            f"{seq_counter:03d}",
-                            target_name,
-                            priority,
-                            current.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            ra_value,
-                            dec_value,
-                            target_info if target_info is not None else pd.DataFrame(),
-                        )
-                        seq_counter += 1
-                        current = next_value
-                    continue
-                if fallback_occultation is None:
-                    continue
-                occ_target, ra_occ, dec_occ, occ_info = fallback_occultation
-                current = segment_start
-                while current < segment_stop:
-                    next_value = (
-                        min(current + self.occultation_limit, segment_stop)
-                        if self.config.break_occultation_sequences
-                        else segment_stop
+                    seq_counter = self._emit_science_sequences(
+                        visit_element, seq_counter, target_name,
+                        seg_start, seg_stop, ra_value, dec_value,
+                        target_info, priority_flag, transit_start, transit_stop,
                     )
-                    observation_sequence(
-                        visit_element,
-                        f"{seq_counter:03d}",
-                        occ_target,
-                        "0",
-                        current.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        ra_occ,
-                        dec_occ,
-                        occ_info if occ_info is not None else pd.DataFrame(),
+                elif fallback_occultation is not None:
+                    occ_target, ra_occ, dec_occ, occ_info = fallback_occultation
+                    seq_counter = self._emit_occultation_sequences(
+                        visit_element, seq_counter, occ_target,
+                        seg_start, seg_stop, ra_occ, dec_occ, occ_info,
                     )
-                    self.occultation_obs_time[occ_target] = (
-                        self.occultation_obs_time.get(occ_target, timedelta())
-                        + (next_value - current)
-                    )
-                    seq_counter += 1
-                    current = next_value
             return
 
-        occ_df, scheduled = occultation_info
-        if not scheduled or occ_df is None:
-            LOGGER.warning(
-                "Unable to schedule occultation target for %s between %s and %s",
-                target_name,
-                start,
-                final_time,
-            )
-            fallback_occultation = self._select_fallback_occultation_target(
-                ra_value,
-                dec_value,
-            )
-            seq_counter = 1
-            for change_position, change_idx in enumerate(augmented_changes):
-                if change_position == 0:
-                    segment_start = visit_times[0]
-                else:
-                    segment_start = visit_times[augmented_changes[change_position - 1] + 1]
-                segment_stop = visit_times[change_idx + 1]
-                is_visible = bool(visibility_flags[change_idx])
-                if is_visible:
-                    current = segment_start
-                    while current < segment_stop:
-                        next_value = min(current + self.sequence_duration, segment_stop)
-                        priority = _target_priority(
-                            priority_flag,
-                            transit_start,
-                            transit_stop,
-                            current,
-                            next_value,
-                        )
-                        observation_sequence(
-                            visit_element,
-                            f"{seq_counter:03d}",
-                            target_name,
-                            priority,
-                            current.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            ra_value,
-                            dec_value,
-                            target_info if target_info is not None else pd.DataFrame(),
-                        )
-                        seq_counter += 1
-                        current = next_value
-                    continue
-                if fallback_occultation is None:
-                    continue
-                occ_target, ra_occ, dec_occ, occ_info = fallback_occultation
-                current = segment_start
-                while current < segment_stop:
-                    next_value = (
-                        min(current + self.occultation_limit, segment_stop)
-                        if self.config.break_occultation_sequences
-                        else segment_stop
-                    )
-                    observation_sequence(
-                        visit_element,
-                        f"{seq_counter:03d}",
-                        occ_target,
-                        "0",
-                        current.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        ra_occ,
-                        dec_occ,
-                        occ_info if occ_info is not None else pd.DataFrame(),
-                    )
-                    self.occultation_obs_time[occ_target] = (
-                        self.occultation_obs_time.get(occ_target, timedelta())
-                        + (next_value - current)
-                    )
-                    seq_counter += 1
-                    current = next_value
-            return
-
-        # Build a temporal index from occ_df so we can match occultation
-        # targets by time overlap rather than relying on positional oc_index.
+        # --- Path 3: scheduled occ_df available -----------------------------
         occ_time_index: Optional[pd.DataFrame] = None
-        if occ_df is not None and {"start", "stop", "Target"}.issubset(set(occ_df.columns)):
+        if {"start", "stop", "Target"}.issubset(set(occ_df.columns)):
             occ_time_index = occ_df.copy()
             try:
                 occ_time_index["_start_dt"] = pd.to_datetime(
@@ -557,129 +551,116 @@ class _ScienceCalendarBuilder:
                 occ_time_index = None
 
         oc_index = 0
-        for change_position, change_idx in enumerate(augmented_changes):
-            if change_position == 0:
-                segment_start = visit_times[0]
-            else:
-                segment_start = visit_times[augmented_changes[change_position - 1] + 1]
-
-            segment_stop = visit_times[change_idx + 1]
-            is_visible = bool(visibility_flags[change_idx])
-
+        for seg_start, seg_stop, is_visible in self._iterate_segments(
+            augmented_changes, visit_times, visibility_flags, start, final_time,
+        ):
             if is_visible:
-                current = segment_start
-                while current < segment_stop:
-                    next_value = min(current + self.sequence_duration, segment_stop)
-                    priority = _target_priority(
-                        priority_flag,
-                        transit_start,
-                        transit_stop,
-                        current,
-                        next_value,
+                seq_counter = self._emit_science_sequences(
+                    visit_element, seq_counter, target_name,
+                    seg_start, seg_stop, ra_value, dec_value,
+                    target_info, priority_flag, transit_start, transit_stop,
+                )
+                continue
+
+            # Occultation segment — iterate using scheduled occ_df.
+            current = seg_start
+            while current < seg_stop:
+                next_value = self._occ_chunk_end(current, seg_stop)
+
+                if oc_index >= len(occ_df):
+                    # Pre-built schedule exhausted — fall back to catalog.
+                    fallback = self._select_fallback_occultation_target(
+                        ra_value, dec_value,
                     )
-                    observation_sequence(
-                        visit_element,
-                        f"{seq_counter:03d}",
-                        target_name,
-                        priority,
-                        current.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        ra_value,
-                        dec_value,
-                        target_info if target_info is not None else pd.DataFrame(),
-                    )
-                    seq_counter += 1
-                    current = next_value
-            else:
-                current = segment_start
-                while current < segment_stop:
-                    next_value = (
-                        min(current + self.occultation_limit, segment_stop)
-                        if self.config.break_occultation_sequences
-                        else segment_stop
-                    )
-                    if occ_df is None or oc_index >= len(occ_df):
+                    if fallback is None:
                         LOGGER.warning(
-                            "Ran out of occultation targets for %s between %s and %s",
-                            target_name,
-                            current,
-                            next_value,
+                            "Ran out of occultation targets for %s "
+                            "between %s and %s",
+                            target_name, current, next_value,
                         )
                         break
+                    fb_target, fb_ra, fb_dec, fb_info = fallback
+                    seq_counter = self._emit_occultation_sequences(
+                        visit_element, seq_counter, fb_target,
+                        current, seg_stop, fb_ra, fb_dec, fb_info,
+                    )
+                    break
 
-                    # Prefer time-based lookup; fall back to positional index.
-                    occ_row = None
-                    used_fallback_row = False
-                    if occ_time_index is not None and not occ_time_index.empty:
-                        exact_mask = (occ_time_index["_start_dt"] <= current) & (
-                            occ_time_index["_stop_dt"] >= next_value
+                # Prefer time-based lookup; fall back to positional index.
+                occ_row = None
+                used_fallback_row = False
+                if occ_time_index is not None and not occ_time_index.empty:
+                    exact_mask = (
+                        (occ_time_index["_start_dt"] <= current)
+                        & (occ_time_index["_stop_dt"] >= next_value)
+                    )
+                    if exact_mask.any():
+                        occ_row = occ_time_index.loc[exact_mask].iloc[0]
+                    else:
+                        overlap_mask = (
+                            (occ_time_index["_start_dt"] < next_value)
+                            & (occ_time_index["_stop_dt"] > current)
                         )
-                        if exact_mask.any():
-                            occ_row = occ_time_index.loc[exact_mask].iloc[0]
-                        else:
-                            overlap_mask = (occ_time_index["_start_dt"] < next_value) & (
-                                occ_time_index["_stop_dt"] > current
-                            )
-                            if overlap_mask.any():
-                                occ_row = occ_time_index.loc[overlap_mask].iloc[0]
+                        if overlap_mask.any():
+                            occ_row = occ_time_index.loc[overlap_mask].iloc[0]
 
-                    if occ_row is None:
-                        occ_row = occ_df.iloc[oc_index]
-                        used_fallback_row = True
+                if occ_row is None:
+                    occ_row = occ_df.iloc[oc_index]
+                    used_fallback_row = True
 
-                    occ_target = str(occ_row["Target"])
+                occ_target = str(occ_row["Target"])
 
-                    # Check if this occultation target has exceeded its time limit
-                    current_occ_time = self.occultation_obs_time.get(
-                        occ_target, timedelta()
-                    )
-                    target_time_limit = self._get_occultation_time_limit(occ_target)
-                    if current_occ_time >= target_time_limit:
-                        LOGGER.info(
-                            "Skipping %s: exceeded occultation time limit (%.1f/%.1f hrs)",
-                            occ_target,
-                            current_occ_time.total_seconds() / 3600,
-                            target_time_limit.total_seconds() / 3600,
-                        )
-                        oc_index += 1
-                        continue
-
-                    occ_info = _lookup_occultation_info(
+                # Check if this occultation target has exceeded its time limit
+                current_occ_time = self.occultation_obs_time.get(
+                    occ_target, timedelta()
+                )
+                target_time_limit = self._get_occultation_time_limit(occ_target)
+                if current_occ_time >= target_time_limit:
+                    LOGGER.info(
+                        "Skipping %s: exceeded occultation time limit "
+                        "(%.1f/%.1f hrs)",
                         occ_target,
-                        self.target_catalog,
-                        self.aux_catalog,
-                        self.occ_catalog,
+                        current_occ_time.total_seconds() / 3600,
+                        target_time_limit.total_seconds() / 3600,
                     )
-                    ra_occ = _fallback_float(
-                        occ_row.get("RA"), occ_info, "RA"
-                    )
-                    dec_occ = _fallback_float(
-                        occ_row.get("DEC"), occ_info, "DEC"
-                    )
+                    oc_index += 1
+                    continue
 
-                    observation_sequence(
-                        visit_element,
-                        f"{seq_counter:03d}",
-                        occ_target,
-                        "0",
-                        current.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        ra_occ,
-                        dec_occ,
-                        occ_info if occ_info is not None else pd.DataFrame(),
-                    )
+                occ_info = _lookup_occultation_info(
+                    occ_target,
+                    self.target_catalog,
+                    self.aux_catalog,
+                    self.occ_catalog,
+                )
+                ra_occ = _fallback_float(
+                    occ_row.get("RA"), occ_info, "RA"
+                )
+                dec_occ = _fallback_float(
+                    occ_row.get("DEC"), occ_info, "DEC"
+                )
 
-                    # Track the observation time for this occultation target
-                    sequence_duration = next_value - current
-                    self.occultation_obs_time[occ_target] = (
-                        self.occultation_obs_time.get(occ_target, timedelta())
-                        + sequence_duration
-                    )
+                observation_sequence(
+                    visit_element,
+                    f"{seq_counter:03d}",
+                    occ_target,
+                    "0",
+                    current.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    ra_occ,
+                    dec_occ,
+                    occ_info if occ_info is not None else pd.DataFrame(),
+                )
 
-                    seq_counter += 1
-                    if used_fallback_row:
-                        oc_index += 1
-                    current = next_value
+                sequence_duration = next_value - current
+                self.occultation_obs_time[occ_target] = (
+                    self.occultation_obs_time.get(occ_target, timedelta())
+                    + sequence_duration
+                )
+
+                seq_counter += 1
+                if used_fallback_row:
+                    oc_index += 1
+                current = next_value
 
     def _emit_full_visibility(
         self,
@@ -694,7 +675,10 @@ class _ScienceCalendarBuilder:
         transit_start: Sequence[datetime],
         transit_stop: Sequence[datetime],
     ) -> None:
-        segments = break_long_sequences(start, stop, self.sequence_duration)
+        segments = break_long_sequences(
+            start, stop, self.sequence_duration,
+            min_chunk=timedelta(minutes=self.config.min_sequence_minutes),
+        )
         seq_counter = 1
         for seg_start, seg_stop in segments:
             priority = _target_priority(

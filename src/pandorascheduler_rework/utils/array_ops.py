@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -43,7 +43,10 @@ def remove_short_sequences(
 
 
 def break_long_sequences(
-    start: datetime, end: datetime, step: timedelta
+    start: datetime,
+    end: datetime,
+    step: timedelta,
+    min_chunk: Optional[timedelta] = None,
 ) -> List[Tuple[datetime, datetime]]:
     """Break long time range into smaller chunks.
 
@@ -51,6 +54,9 @@ def break_long_sequences(
         start: Start time
         end: End time
         step: Maximum chunk duration
+        min_chunk: If the last chunk would be shorter than this,
+            merge it into the previous chunk instead of emitting it
+            as a standalone segment.  ``None`` disables merging.
 
     Returns:
         List of (start, end) tuples for each chunk
@@ -61,4 +67,14 @@ def break_long_sequences(
         next_val = min(current + step, end)
         ranges.append((current, next_val))
         current = next_val
+
+    # Absorb a short trailing chunk into the previous one.
+    if (
+        min_chunk is not None
+        and len(ranges) >= 2
+        and (ranges[-1][1] - ranges[-1][0]) < min_chunk
+    ):
+        ranges[-2] = (ranges[-2][0], ranges[-1][1])
+        ranges.pop()
+
     return ranges

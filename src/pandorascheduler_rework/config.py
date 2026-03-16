@@ -164,8 +164,8 @@ class PandoraSchedulerConfig:
     occ_sequence_limit_min: int = 50
     """Maximum occultation sequence duration in minutes."""
 
-    min_sequence_minutes: int = 5
-    """Minimum sequence length to include in XML (shorter sequences dropped)."""
+    min_sequence_minutes: int = 8
+    """Minimum sequence length to include in XML (shorter sequences merged)."""
 
     break_occultation_sequences: bool = True
     """Break long occultation sequences into chunks."""

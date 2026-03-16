@@ -146,7 +146,7 @@ def test_generate_science_calendar_with_occultation(tmp_path, monkeypatch):
     # Ensure the metadata reflects the configured minimum sequence pruning value
     meta = root.find(q("Meta"))
     assert meta is not None
-    assert meta.get("Removed_Sequences_Shorter_Than_min") == "5"
+    assert meta.get("Removed_Sequences_Shorter_Than_min") == "8"
     assert meta.get("Created") == "2025-11-17 18:10:32"
 
 
