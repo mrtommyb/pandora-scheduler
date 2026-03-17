@@ -2,7 +2,7 @@
 
 Covers:
   - Config defaults and explicit construction
-  - strict_occultation_time_limits=False (relaxed mode)
+  - requested_occ_time_override=True (relaxed mode)
   - enable_occultation_pass1=False (Pass 1 is skipped)
   - use_pass1 parameter in schedule_occultation_targets
 """
@@ -99,35 +99,35 @@ class TestConfigDefaults:
         cfg = _make_config()
         assert cfg.enable_occultation_xml is True
         assert cfg.enable_occultation_pass1 is True
-        assert cfg.strict_occultation_time_limits is True
+        assert cfg.requested_occ_time_override is False
 
     def test_explicit_false(self):
         cfg = _make_config(
             enable_occultation_xml=False,
             enable_occultation_pass1=False,
-            strict_occultation_time_limits=False,
+            requested_occ_time_override=True,
         )
         assert cfg.enable_occultation_xml is False
         assert cfg.enable_occultation_pass1 is False
-        assert cfg.strict_occultation_time_limits is False
+        assert cfg.requested_occ_time_override is True
 
 
 # ---------------------------------------------------------------------------
-# strict_occultation_time_limits
+# requested_occ_time_override
 # ---------------------------------------------------------------------------
 
 class TestRelaxedTimeLimits:
-    """When strict_occultation_time_limits=False, errors become warnings."""
+    """When requested_occ_time_override=True, errors become warnings."""
 
     def test_relaxed_returns_large_fallback_for_missing_target(self, tmp_path):
-        config = _make_config(strict_occultation_time_limits=False)
+        config = _make_config(requested_occ_time_override=True)
         builder = _make_builder(tmp_path, config)
         result = builder._get_occultation_time_limit("UnknownTarget")
         # Should return a very large timedelta instead of raising
         assert result >= timedelta(hours=999_999)
 
     def test_strict_raises_for_missing_target(self, tmp_path):
-        config = _make_config(strict_occultation_time_limits=True)
+        config = _make_config(requested_occ_time_override=False)
         builder = _make_builder(tmp_path, config)
         with pytest.raises(ValueError, match="not found in catalog"):
             builder._get_occultation_time_limit("UnknownTarget")
@@ -165,7 +165,7 @@ class TestRelaxedTimeLimits:
             schedule_csv=schedule_path,
             data_dir=data_dir,
         )
-        config = _make_config(strict_occultation_time_limits=False)
+        config = _make_config(requested_occ_time_override=True)
         builder = science_calendar._ScienceCalendarBuilder(inputs, config)
         result = builder._get_occultation_time_limit("AnyTarget")
         assert result >= timedelta(hours=999_999)

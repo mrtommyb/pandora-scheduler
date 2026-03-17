@@ -539,8 +539,6 @@ def schedule_occultation_targets(
 
             # Format start/stop as ISO UTC strings
             try:
-                from astropy.time import Time
-
                 start_dt = Time(run_start_mjd, format="mjd", scale="utc").to_datetime()
                 stop_dt = Time(run_end_mjd, format="mjd", scale="utc").to_datetime()
                 start_str = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
