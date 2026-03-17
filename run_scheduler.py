@@ -155,6 +155,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Earth avoidance when nearest limb is in shadow (degrees). None = use --earth-avoidance uniformly.",
     )
+    parser.add_argument(
+        "--twilight-margin",
+        type=float,
+        default=0.0,
+        help="Degrees past geometric terminator to classify as sunlit for day/night keepout (default: 0 = sharp terminator).",
+    )
 
     # Star tracker keepout configuration
     parser.add_argument(
@@ -732,6 +738,10 @@ def main() -> int:
         _raw_night = _get_val("earth_avoidance_night_deg", args.earth_avoidance_night, None)
         earth_avoid_night = float(_raw_night) if _raw_night is not None else None
 
+        twilight_margin = float(
+            _get_val("twilight_margin_deg", args.twilight_margin, 0.0)
+        )
+
         # Star tracker keepouts
         st_sun_min = float(
             _get_val("st_sun_min_deg", args.st_sun_min, 0.0)
@@ -818,7 +828,7 @@ def main() -> int:
         )
         requested_occ_time_override = _as_bool(
             _get_val(
-                ["requested_occ_time_override"],
+                "requested_occ_time_override",
                 True if args.requested_occ_time_override else None,
                 None,
             ),
@@ -866,6 +876,7 @@ def main() -> int:
             earth_avoidance_deg=earth_avoid,
             earth_avoidance_day_deg=earth_avoid_day,
             earth_avoidance_night_deg=earth_avoid_night,
+            twilight_margin_deg=twilight_margin,
             # Star tracker keepouts
             st_sun_min_deg=st_sun_min,
             st_moon_min_deg=st_moon_min,

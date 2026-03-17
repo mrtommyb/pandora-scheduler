@@ -215,6 +215,71 @@ class TestEarthlimbIsSunlit:
         # n·sun = cos(θ)·(-1) + sin(θ)·0 = -cos(θ) < 0 → NOT sunlit
         assert not result[0]
 
+    # ---- twilight_margin_deg tests ----
+
+    def test_twilight_margin_default_zero(self):
+        """Default margin produces same result as explicit margin=0."""
+        nadir = _tile([0, 0, -1], 1)
+        target = _tile([1, 0, 0], 1)
+        sun = _tile([1, 0, 0], 1)
+        default = earthlimb_is_sunlit(target, nadir, sun)
+        explicit = earthlimb_is_sunlit(target, nadir, sun, twilight_margin_deg=0.0)
+        np.testing.assert_array_equal(default, explicit)
+
+    def test_twilight_margin_broadens_sunlit(self):
+        """A positive margin classifies marginal cases as sunlit.
+
+        Construct geometry where dot(n, sun) is slightly negative (just past
+        terminator).  With margin=0 → dark; with a large enough margin → sunlit.
+        """
+        nadir = _tile([0, 0, -1], 1)
+        target = _tile([1, 0, 0], 1)
+        # Sun barely below the horizon of the limb normal:
+        # dot(limb_dir, sun) = cos(91°) ≈ -0.0175
+        sun = _tile(_unit([np.cos(np.deg2rad(91)), np.sin(np.deg2rad(91)), 0]), 1)
+
+        # Without limb_angle_rad (legacy path), limb_dir·sun ≈ -0.017
+        assert not earthlimb_is_sunlit(target, nadir, sun, twilight_margin_deg=0.0)[0]
+        # Margin of 5° → threshold = -sin(5°) ≈ -0.087, so -0.017 > -0.087 → sunlit
+        assert earthlimb_is_sunlit(target, nadir, sun, twilight_margin_deg=5.0)[0]
+
+    def test_twilight_margin_with_limb_angle(self):
+        """Margin works with the full surface-normal path (limb_angle_rad given)."""
+        nadir = _tile([0, 0, -1], 1)
+        target = _tile([1, 0, 0], 1)
+        R_EARTH = 6371.0
+        la_rad = np.array([np.arccos(R_EARTH / (R_EARTH + 600.0))])
+
+        # Surface normal: n = [sin(la), 0, cos(la)]  (in x-z plane)
+        # Choose sun so that n·sun = cos(angle_between) = -0.02
+        # i.e. angle_between = arccos(-0.02) ≈ 91.1° from n
+        # Parameterise sun = [sin(β), 0, cos(β)] in x-z plane:
+        #   n·sun = cos(β - la) = -0.02  →  β = la + arccos(-0.02)
+        beta = la_rad[0] + np.arccos(-0.02)
+        sun = _tile([np.sin(beta), 0.0, np.cos(beta)], 1)
+
+        dot_n_sun = (
+            np.sin(la_rad[0]) * sun[0, 0] + np.cos(la_rad[0]) * sun[0, 2]
+        )
+        assert dot_n_sun < 0, "Sanity: n·sun should be slightly negative"
+
+        assert not earthlimb_is_sunlit(target, nadir, sun, la_rad, twilight_margin_deg=0.0)[0]
+        # Margin=10° → threshold = -sin(10°) ≈ -0.174, -0.02 > -0.174 → sunlit
+        assert earthlimb_is_sunlit(target, nadir, sun, la_rad, twilight_margin_deg=10.0)[0]
+
+    def test_twilight_margin_monotonic(self):
+        """Increasing margin never reduces the number of sunlit timesteps."""
+        nadir = _tile([0, 0, -1], 10)
+        target = _tile([1, 0, 0], 10)
+        # Sun sweeps from fully sunlit to fully dark
+        angles = np.linspace(0, np.pi, 10)
+        sun = np.column_stack([np.cos(angles), np.sin(angles), np.zeros(10)])
+
+        count_0 = earthlimb_is_sunlit(target, nadir, sun, twilight_margin_deg=0.0).sum()
+        count_5 = earthlimb_is_sunlit(target, nadir, sun, twilight_margin_deg=5.0).sum()
+        count_18 = earthlimb_is_sunlit(target, nadir, sun, twilight_margin_deg=18.0).sum()
+        assert count_0 <= count_5 <= count_18
+
 
 # ============================================================================
 # effective_earth_threshold
@@ -241,6 +306,44 @@ class TestEffectiveEarthThreshold:
         result = effective_earth_threshold(target, nadir, sun, 110.0, 80.0, 86.0)
         assert np.isclose(result[0], 110.0)
         assert np.isclose(result[1], 80.0)
+
+    def test_twilight_margin_shifts_classification(self):
+        """Margin moves a marginal timestep from night→day threshold.
+
+        Sun at 91° from limb_dir → dot ≈ -0.017 < 0.  With margin=0 it is
+        dark (→ night_deg); with margin=5° → threshold ≈ -0.087 so it becomes
+        sunlit (→ day_deg).
+        """
+        nadir = _tile([0, 0, -1], 1)
+        target = _tile([1, 0, 0], 1)
+        sun = _tile(_unit([np.cos(np.deg2rad(91)), np.sin(np.deg2rad(91)), 0]), 1)
+
+        res0 = effective_earth_threshold(
+            target, nadir, sun, 110.0, 80.0, 86.0, twilight_margin_deg=0.0,
+        )
+        assert np.isclose(res0[0], 80.0), "Margin 0: marginal point → night"
+
+        res5 = effective_earth_threshold(
+            target, nadir, sun, 110.0, 80.0, 86.0, twilight_margin_deg=5.0,
+        )
+        assert np.isclose(res5[0], 110.0), "Margin 5°: marginal point → day"
+
+
+# ============================================================================
+# Config default
+# ============================================================================
+
+
+class TestTwilightMarginConfig:
+    def test_default_zero(self):
+        """Config defaults to 0.0 twilight margin."""
+        cfg = _make_config()
+        assert cfg.twilight_margin_deg == 0.0
+
+    def test_custom_margin(self):
+        """Config accepts a positive twilight margin."""
+        cfg = _make_config(twilight_margin_deg=18.0)
+        assert cfg.twilight_margin_deg == 18.0
 
 
 # ============================================================================

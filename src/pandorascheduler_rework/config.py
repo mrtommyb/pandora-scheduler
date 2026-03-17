@@ -122,6 +122,15 @@ class PandoraSchedulerConfig:
     Recommended value when enabled: 80.0.
     """
 
+    twilight_margin_deg: float = 0.0
+    """Degrees past the geometric terminator to classify as sunlit (degrees).
+
+    Expands the "sunlit" classification for day/night Earth-limb keepout.
+    0 (default) gives a sharp terminator matching prior behaviour.  18 is
+    analogous to astronomical twilight.  Only has an effect when
+    ``earth_avoidance_day_deg`` or ``earth_avoidance_night_deg`` is set.
+    """
+
     # ============================================================================
     # STAR TRACKER KEEPOUT ANGLES (degrees)
     # ============================================================================

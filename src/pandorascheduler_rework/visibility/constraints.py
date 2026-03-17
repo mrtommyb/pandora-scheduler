@@ -96,6 +96,7 @@ def earthlimb_is_sunlit(
     nadir_unit: np.ndarray,
     sun_unit: np.ndarray,
     limb_angle_rad: Optional[np.ndarray] = None,
+    twilight_margin_deg: float = 0.0,
 ) -> np.ndarray:
     """Determine whether the nearest Earth-limb point to the target is sunlit.
 
@@ -105,7 +106,7 @@ def earthlimb_is_sunlit(
 
     where *limb_dir* is the projection of the target direction onto the plane
     perpendicular to the zenith, and *limb_angle* = arccos(R_earth / d).
-    The limb point is sunlit when ``dot(n, sun) > 0``.
+    The limb point is sunlit when ``dot(n, sun) > -sin(twilight_margin)``.
 
     Parameters
     ----------
@@ -119,6 +120,10 @@ def earthlimb_is_sunlit(
         Earth-limb half-angle in radians (``arccos(R_earth / d)``).
         When *None*, falls back to a horizontal projection only
         (legacy behaviour, ignoring the zenith component).
+    twilight_margin_deg : float
+        Degrees past the geometric terminator to still classify as
+        sunlit.  0 (default) reproduces the original sharp terminator.
+        18 is analogous to astronomical twilight.
 
     Returns
     -------
@@ -137,9 +142,11 @@ def earthlimb_is_sunlit(
     proj_norm = np.where(proj_norm == 0, 1.0, proj_norm)
     limb_dir = proj / proj_norm  # unit direction to nearest limb point (N, 3)
 
+    threshold = -np.sin(np.deg2rad(twilight_margin_deg))
+
     if limb_angle_rad is None:
         # Legacy fallback: horizontal projection only
-        return np.einsum("ij,ij->i", limb_dir, sun_unit) > 0
+        return np.einsum("ij,ij->i", limb_dir, sun_unit) > threshold
 
     # Full surface-normal check: n = cos(θ)*zenith + sin(θ)*limb_dir
     cos_la = np.cos(limb_angle_rad)
@@ -149,7 +156,7 @@ def earthlimb_is_sunlit(
         cos_la * np.einsum("ij,ij->i", zenith, sun_unit)
         + sin_la * np.einsum("ij,ij->i", limb_dir, sun_unit)
     )
-    return dot_n_sun > 0
+    return dot_n_sun > threshold
 
 
 def effective_earth_threshold(
@@ -160,6 +167,7 @@ def effective_earth_threshold(
     night_deg: Optional[float],
     default_deg: float,
     limb_angle_rad: Optional[np.ndarray] = None,
+    twilight_margin_deg: float = 0.0,
 ) -> np.ndarray | float:
     """Per-timestep Earth-avoidance threshold (degrees).
 
@@ -174,13 +182,18 @@ def effective_earth_threshold(
         Earth-limb half-angle in radians, forwarded to
         ``earthlimb_is_sunlit``.  Required for correct geometry;
         when *None* falls back to legacy horizontal-projection-only.
+    twilight_margin_deg : float
+        Degrees past the geometric terminator to classify as sunlit,
+        forwarded to ``earthlimb_is_sunlit``.  0 = sharp terminator.
     """
     if day_deg is None and night_deg is None:
         return default_deg
     day = day_deg if day_deg is not None else default_deg
     night = night_deg if night_deg is not None else default_deg
     sunlit = earthlimb_is_sunlit(
-        target_unit, nadir_unit, sun_unit, limb_angle_rad=limb_angle_rad
+        target_unit, nadir_unit, sun_unit,
+        limb_angle_rad=limb_angle_rad,
+        twilight_margin_deg=twilight_margin_deg,
     )
     return np.where(sunlit, day, night)
 
@@ -593,6 +606,7 @@ def compute_visibility_with_constraints(
         config.earth_avoidance_night_deg,
         config.earth_avoidance_deg,
         limb_angle_rad=limb_angle_rad,
+        twilight_margin_deg=config.twilight_margin_deg,
     )
     earth_ok = earth_center_sep_deg > earth_threshold
 
