@@ -103,12 +103,13 @@ class _ScienceCalendarBuilder:
 
         Looks up 'Number of Hours Requested' from the occultation manifest.
 
-        When ``requested_hours_conflict_count`` is False (default), raises
+        When ``requested_occ_time_override`` is False (default), raises
         ValueError if the catalog is missing, the target is not found, or
         the required column is missing.
 
-        When the override is enabled, logs a warning and returns a very large
-        effective limit so scheduling can continue.
+        When ``requested_occ_time_override`` is True (override enabled), logs a
+        warning and returns a very large effective limit so scheduling
+        can continue.
         """
         enforce_requested_hours = not self.config.requested_occ_time_override
         _RELAXED_FALLBACK = timedelta(hours=1_000_000)
