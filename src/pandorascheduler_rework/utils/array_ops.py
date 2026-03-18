@@ -13,17 +13,25 @@ def remove_short_sequences(
 ) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
     """Remove visibility sequences shorter than threshold.
 
+    This performs two passes:
+    1. Zero out short visible runs (short 1-runs → 0) so that
+       briefly-visible windows are not scheduled.
+    2. Fill short non-visible gaps (short 0-runs between 1-runs → 1)
+       so that brief occultation dips do not fragment the schedule
+       into unusably short sequences.
+
     Args:
         array: Binary visibility array (1=visible, 0=not visible)
         sequence_too_short: Minimum sequence length to keep
 
     Returns:
-        Tuple of (cleaned array, list of removed spans)
+        Tuple of (cleaned array, list of removed visible spans)
     """
     cleaned = np.asarray(array, dtype=float).copy()
     start_index = None
     spans: List[Tuple[int, int]] = []
 
+    # Pass 1: remove short visible runs (1-runs shorter than threshold).
     for idx, value in enumerate(cleaned):
         if value == 1 and start_index is None:
             start_index = idx
@@ -38,6 +46,18 @@ def remove_short_sequences(
 
     for start_idx, stop_idx in spans:
         cleaned[start_idx : stop_idx + 1] = 0.0
+
+    # Pass 2: fill short non-visible gaps (0-runs shorter than threshold
+    # that sit between two visible regions).  Trailing gaps at the end of
+    # the array are left alone.
+    gap_start: Optional[int] = None
+    for idx, value in enumerate(cleaned):
+        if value == 0 and gap_start is None:
+            gap_start = idx
+        elif value != 0 and gap_start is not None:
+            if idx - gap_start < sequence_too_short and gap_start > 0:
+                cleaned[gap_start:idx] = 1.0
+            gap_start = None
 
     return cleaned, spans
 

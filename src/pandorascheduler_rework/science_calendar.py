@@ -203,6 +203,51 @@ class _ScienceCalendarBuilder:
             )
             yield seg_start, seg_stop, bool(visibility_flags[change_idx])
 
+    def _merged_segments(
+        self,
+        augmented_changes: List[int],
+        visit_times: List[datetime],
+        visibility_flags: List[int],
+        start: datetime,
+        final_time: datetime,
+    ):
+        """Yield ``(segment_start, segment_stop, is_visible)`` like
+        :meth:`_iterate_segments`, but absorb any segment whose duration is
+        below ``config.min_sequence_minutes`` into its following neighbour
+        (or preceding neighbour when no following one exists).
+
+        When ``min_sequence_minutes`` is 0 the output is identical to
+        :meth:`_iterate_segments`."""
+        threshold = timedelta(minutes=self.config.min_sequence_minutes)
+        segments = list(
+            self._iterate_segments(
+                augmented_changes, visit_times, visibility_flags, start, final_time,
+            )
+        )
+        if not threshold or len(segments) <= 1:
+            yield from segments
+            return
+
+        # Iteratively absorb short segments until stable.
+        changed = True
+        while changed:
+            changed = False
+            merged: list = []
+            i = 0
+            while i < len(segments):
+                seg_start, seg_stop, is_vis = segments[i]
+                if (seg_stop - seg_start) < threshold and i + 1 < len(segments):
+                    # Absorb this short segment into the next one.
+                    nxt_start, nxt_stop, nxt_vis = segments[i + 1]
+                    segments[i + 1] = (seg_start, nxt_stop, nxt_vis)
+                    changed = True
+                else:
+                    merged.append((seg_start, seg_stop, is_vis))
+                i += 1
+            segments = merged
+
+        yield from segments
+
     def _emit_science_sequences(
         self,
         visit_element: ET.Element,
@@ -219,6 +264,15 @@ class _ScienceCalendarBuilder:
     ) -> int:
         """Emit chunked science observation sequences.  Returns updated
         *seq_counter*."""
+        min_td = timedelta(minutes=self.config.min_sequence_minutes)
+        if min_td and (segment_stop - segment_start) < min_td:
+            LOGGER.debug(
+                "Skipping short science segment for %s (%s < %d min)",
+                target_name,
+                segment_stop - segment_start,
+                self.config.min_sequence_minutes,
+            )
+            return seq_counter
         current = segment_start
         while current < segment_stop:
             next_value = self._next_chunk_end(
@@ -257,6 +311,16 @@ class _ScienceCalendarBuilder:
         *seq_counter*."""
         current = segment_start
         while current < segment_stop:
+            current_occ_time = self.occultation_obs_time.get(occ_target, timedelta())
+            target_time_limit = self._get_occultation_time_limit(occ_target)
+            if current_occ_time >= target_time_limit:
+                LOGGER.info(
+                    "Skipping %s: exceeded occultation time limit (%.1f/%.1f hrs)",
+                    occ_target,
+                    current_occ_time.total_seconds() / 3600,
+                    target_time_limit.total_seconds() / 3600,
+                )
+                break
             next_value = self._occ_chunk_end(current, segment_stop)
             observation_sequence(
                 visit_element,
@@ -478,7 +542,7 @@ class _ScienceCalendarBuilder:
 
         # --- Path 1: occultation XML disabled — science-only ---------------
         if not self.config.enable_occultation_xml:
-            for seg_start, seg_stop, is_visible in self._iterate_segments(
+            for seg_start, seg_stop, is_visible in self._merged_segments(
                 augmented_changes, visit_times, visibility_flags, start, final_time,
             ):
                 if is_visible:
@@ -516,7 +580,7 @@ class _ScienceCalendarBuilder:
 
         # --- Path 2: catalog-fallback occultation (no occ_df) ---------------
         if occ_df is None:
-            for seg_start, seg_stop, is_visible in self._iterate_segments(
+            for seg_start, seg_stop, is_visible in self._merged_segments(
                 augmented_changes, visit_times, visibility_flags, start, final_time,
             ):
                 if is_visible:
@@ -551,7 +615,7 @@ class _ScienceCalendarBuilder:
                 occ_time_index = None
 
         oc_index = 0
-        for seg_start, seg_stop, is_visible in self._iterate_segments(
+        for seg_start, seg_stop, is_visible in self._merged_segments(
             augmented_changes, visit_times, visibility_flags, start, final_time,
         ):
             if is_visible:

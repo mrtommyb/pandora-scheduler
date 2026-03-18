@@ -13,6 +13,7 @@ have shape ``(N,)``.
 from __future__ import annotations
 
 import logging
+import warnings
 from typing import Optional
 
 import numpy as np
@@ -69,6 +70,11 @@ def fast_limb_deg(
     limb_angle_rad: np.ndarray,
 ) -> np.ndarray:
     """Angular distance from the Earth's limb to a target (degrees).
+
+    Used for **star-tracker** Earth-limb keepout (limb-angle geometry).
+    This is intentionally different from the boresight Earth-avoidance model
+    which uses centre-of-Earth angular separation.  See the dual Earth-avoidance
+    model note in ``config.py`` (``earth_avoidance_deg`` docstring).
 
     This replicates ``pandoravisibility.Visibility._fast_limb_deg``.
 
@@ -169,7 +175,11 @@ def effective_earth_threshold(
     limb_angle_rad: Optional[np.ndarray] = None,
     twilight_margin_deg: float = 0.0,
 ) -> np.ndarray | float:
-    """Per-timestep Earth-avoidance threshold (degrees).
+    """Per-timestep **boresight** Earth-avoidance threshold (degrees).
+
+    Applies centre-of-Earth angular separation geometry (not limb-angle).
+    Star-tracker Earth keepout uses a separate limb-angle model via
+    ``fast_limb_deg()`` — the two are not interchangeable.
 
     When both *day_deg* and *night_deg* are ``None`` returns the scalar
     *default_deg* (no per-timestep branch needed).  Otherwise returns an
@@ -187,6 +197,15 @@ def effective_earth_threshold(
         forwarded to ``earthlimb_is_sunlit``.  0 = sharp terminator.
     """
     if day_deg is None and night_deg is None:
+        if twilight_margin_deg > 0:
+            warnings.warn(
+                f"twilight_margin_deg={twilight_margin_deg:.1f} has no effect: "
+                "earth_avoidance_day_deg and earth_avoidance_night_deg are both "
+                "None. Set at least one to enable day/night Earth-avoidance "
+                "switching.",
+                UserWarning,
+                stacklevel=2,
+            )
         return default_deg
     day = day_deg if day_deg is not None else default_deg
     night = night_deg if night_deg is not None else default_deg

@@ -315,3 +315,83 @@ class TestGenerateScienceCalendar:
         ns = {"ns": "/pandora/calendar/"}
         meta = root.find("ns:Meta", ns)
         assert meta is not None
+
+
+# ---------------------------------------------------------------------------
+# _merged_segments
+# ---------------------------------------------------------------------------
+
+
+class TestMergedSegments:
+    """Tests for _ScienceCalendarBuilder._merged_segments."""
+
+    def _make_builder(self, tmp_path, min_seq_min=10):
+        _seed_catalogs(tmp_path)
+        csv = tmp_path / "sched.csv"
+        pd.DataFrame(
+            [
+                {
+                    "Target": "Star b",
+                    "Observation Start": "2026-03-01T00:00:00Z",
+                    "Observation Stop": "2026-03-02T00:00:00Z",
+                }
+            ]
+        ).to_csv(csv, index=False)
+        inputs = ScienceCalendarInputs(
+            schedule_csv=csv, data_dir=tmp_path
+        )
+        config = PandoraSchedulerConfig(
+            window_start=datetime(2026, 3, 1),
+            window_end=datetime(2026, 4, 1),
+            min_sequence_minutes=min_seq_min,
+        )
+        return _ScienceCalendarBuilder(inputs, config)
+
+    def test_short_segment_absorbed(self, tmp_path):
+        """A 2-minute segment between two long segments is absorbed."""
+        builder = self._make_builder(tmp_path, min_seq_min=10)
+        t0 = datetime(2026, 3, 1, 0, 0)
+        # 24 vis, 2 novis, 16 vis, 57 novis → 100 minute-resolution
+        flags = [1] * 24 + [0] * 2 + [1] * 16 + [0] * 58
+        times = [t0 + timedelta(minutes=i) for i in range(100)]
+        changes = _visibility_change_indices(flags)
+
+        raw = list(
+            _ScienceCalendarBuilder._iterate_segments(
+                changes, times, flags, t0, times[-1],
+            )
+        )
+        merged = list(
+            builder._merged_segments(
+                changes, times, flags, t0, times[-1],
+            )
+        )
+        # Raw has a short 2-min non-visible segment
+        durations_raw = [
+            (e - s).total_seconds() / 60 for s, e, v in raw
+        ]
+        assert any(d < 10 for d in durations_raw)
+        # Merged has no segments shorter than threshold
+        durations_merged = [
+            (e - s).total_seconds() / 60 for s, e, v in merged
+        ]
+        assert all(d >= 10 for d in durations_merged)
+
+    def test_no_merge_when_disabled(self, tmp_path):
+        """min_sequence_minutes=0 disables merging."""
+        builder = self._make_builder(tmp_path, min_seq_min=0)
+        t0 = datetime(2026, 3, 1, 0, 0)
+        flags = [1] * 5 + [0] * 2 + [1] * 5
+        times = [t0 + timedelta(minutes=i) for i in range(12)]
+        changes = _visibility_change_indices(flags)
+        merged = list(
+            builder._merged_segments(
+                changes, times, flags, t0, times[-1],
+            )
+        )
+        raw = list(
+            _ScienceCalendarBuilder._iterate_segments(
+                changes, times, flags, t0, times[-1],
+            )
+        )
+        assert len(merged) == len(raw)
