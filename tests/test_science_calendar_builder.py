@@ -395,3 +395,33 @@ class TestMergedSegments:
             )
         )
         assert len(merged) == len(raw)
+
+    def test_trailing_short_segment_absorbed(self, tmp_path):
+        """A short segment at the end of the visit is absorbed backward."""
+        builder = self._make_builder(tmp_path, min_seq_min=10)
+        t0 = datetime(2026, 3, 1, 0, 0)
+        # 30 vis, 50 novis, 3 vis, 1 novis  →  change indices at 29,79,82
+        # The trailing 3-min visible segment is below the 10-min threshold.
+        flags = [1] * 30 + [0] * 50 + [1] * 3 + [0] * 1
+        times = [t0 + timedelta(minutes=i) for i in range(len(flags))]
+        changes = _visibility_change_indices(flags)
+
+        raw = list(
+            _ScienceCalendarBuilder._iterate_segments(
+                changes, times, flags, t0, times[-1],
+            )
+        )
+        # Raw should have a trailing 3-min visible segment
+        trailing_vis = [(s, e, v) for s, e, v in raw if v]
+        assert any(
+            (e - s).total_seconds() / 60 < 10 for s, e, v in trailing_vis
+        ), f"Expected a short visible segment; got {trailing_vis}"
+
+        merged = list(
+            builder._merged_segments(
+                changes, times, flags, t0, times[-1],
+            )
+        )
+        # After merging, no segment should be shorter than threshold
+        durations = [(e - s).total_seconds() / 60 for s, e, v in merged]
+        assert all(d >= 10 for d in durations)

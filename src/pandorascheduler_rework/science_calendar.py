@@ -237,11 +237,21 @@ class _ScienceCalendarBuilder:
             i = 0
             while i < len(segments):
                 seg_start, seg_stop, is_vis = segments[i]
-                if (seg_stop - seg_start) < threshold and i + 1 < len(segments):
-                    # Absorb this short segment into the next one.
-                    nxt_start, nxt_stop, nxt_vis = segments[i + 1]
-                    segments[i + 1] = (seg_start, nxt_stop, nxt_vis)
-                    changed = True
+                duration = seg_stop - seg_start
+                if duration < threshold:
+                    if i + 1 < len(segments):
+                        # Absorb this short segment into the next one.
+                        nxt_start, nxt_stop, nxt_vis = segments[i + 1]
+                        segments[i + 1] = (seg_start, nxt_stop, nxt_vis)
+                        changed = True
+                    elif merged:
+                        # No following segment: absorb into the previous one.
+                        prev_start, prev_stop, prev_vis = merged[-1]
+                        merged[-1] = (prev_start, seg_stop, prev_vis)
+                        changed = True
+                    # If there is neither a previous nor a next segment, we
+                    # must have len(segments) == 1, which is handled by the
+                    # early return above, so no action is needed here.
                 else:
                     merged.append((seg_start, seg_stop, is_vis))
                 i += 1
