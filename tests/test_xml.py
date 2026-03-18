@@ -184,6 +184,36 @@ class TestPopulateVdaParameters:
         vda = root.find("AcquireVisCamScienceData")
         assert vda.find("StarRoiDetMethod").text == "2"
 
+    def test_predefined_star_roi_slot_zero_matches_target_ra_dec(self):
+        root = ET.Element("Root")
+        targ_info = pd.DataFrame([
+            {
+                "VDA_StarRoiDetMethod": "SET_BY_TARGET_DEFINITION_FILE",
+                "StarRoiDetMethod": 1,
+                "VDA_numPredefinedStarRois": "SET_BY_TARGET_DEFINITION_FILE",
+                "numPredefinedStarRois": 2,
+                "VDA_PredefinedStarRoiRa": "SET_BY_TARGET_DEFINITION_FILE",
+                "VDA_PredefinedStarRoiDec": "SET_BY_TARGET_DEFINITION_FILE",
+                "RA": 123.45,
+                "DEC": -67.89,
+                "ROI_coord_0": "[1.0, 2.0]",
+                "ROI_coord_1": "[3.0, 4.0]",
+            }
+        ])
+
+        populate_vda_parameters(root, targ_info, diff_in_seconds=10.0)
+
+        vda = root.find("AcquireVisCamScienceData")
+        assert vda is not None
+        roi_ra = vda.find("PredefinedStarRoiRa")
+        roi_dec = vda.find("PredefinedStarRoiDec")
+        assert roi_ra is not None
+        assert roi_dec is not None
+        assert roi_ra.find("RA1").text == "123.450000"
+        assert roi_dec.find("Dec1").text == "-67.890000"
+        assert roi_ra.find("RA2").text == "3.000000"
+        assert roi_dec.find("Dec2").text == "4.000000"
+
 
 class TestXmlIntegration:
     def test_full_observation_sequence_with_all_parameters(self):

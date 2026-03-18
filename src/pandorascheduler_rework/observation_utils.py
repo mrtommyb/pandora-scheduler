@@ -241,6 +241,7 @@ def schedule_occultation_targets(
     o_list,
     try_occ_targets: str,
     show_progress: bool = False,
+    use_pass1: bool = True,
 ):
     starts_array = np.asarray(starts, dtype=float)
     stops_array = np.asarray(stops, dtype=float)
@@ -271,8 +272,6 @@ def schedule_occultation_targets(
 
     base_path = Path(path) if path is not None else None
 
-    base_path = Path(path) if path is not None else None
-
     # Cache visibility data to avoid re-reading files in the second pass
     # Key: v_name, Value: (vis_times, visibility)
     visibility_cache: Dict[str, tuple[np.ndarray, np.ndarray]] = {}
@@ -294,20 +293,34 @@ def schedule_occultation_targets(
         return data
 
     # PASS 1: Search for a single target that covers ALL intervals
-    for v_name in tqdm(v_names, desc=f"{description} (Pass 1)", leave=False, disable=not show_progress):
+    if not use_pass1:
+        LOGGER.info("Pass 1 skipped (enable_occultation_pass1=False)")
+    for v_name in tqdm(v_names, desc=f"{description} (Pass 1)", leave=False, disable=not show_progress or not use_pass1):
         vis_data = _get_visibility(v_name)
         if vis_data is None:
             continue
 
         vis_times, visibility = vis_data
 
+        if not use_pass1:
+            break
+
         # Check if visible for ALL intervals individually (less strict)
         all_visible = True
+        has_nonzero_interval_samples = False
         for start, stop in zip(starts_array, stops_array):
             interval_mask = (vis_times >= start) & (vis_times <= stop)
+            if stop > start and interval_mask.sum() > 0:
+                has_nonzero_interval_samples = True
             if not np.all(visibility[interval_mask] == 1):
                 all_visible = False
                 break
+
+        # Guard against false positives when a candidate has no data at all
+        # across the substantive (non-zero duration) intervals.
+        has_nonzero_interval = bool(np.any(stops_array > starts_array))
+        if has_nonzero_interval and not has_nonzero_interval_samples:
+            all_visible = False
 
         if not all_visible:
             continue
@@ -326,6 +339,15 @@ def schedule_occultation_targets(
 
         return o_df, True
 
+    # Pass 1 summary
+    assigned_after_p1 = int(schedule["Target"].notna().sum())
+    total_intervals = len(starts_array)
+    LOGGER.debug(
+        "Occultation Pass 1: %d/%d intervals assigned",
+        assigned_after_p1,
+        total_intervals,
+    )
+
     # PASS 2: Fill gaps with multiple targets (Greedy approach)
     for v_name in tqdm(v_names, desc=f"{description} (Pass 2)", leave=False, disable=not show_progress):
         # If schedule is full, we are done
@@ -338,9 +360,29 @@ def schedule_occultation_targets(
 
         vis_times, visibility = vis_data
 
+        # If the candidate has no samples across all non-zero intervals in this
+        # visit, skip it (prevents empty-mask full-visibility false positives).
+        has_nonzero_interval_samples = False
+        for start, stop in zip(starts_array, stops_array):
+            if stop <= start:
+                continue
+            interval_mask = (vis_times >= start) & (vis_times <= stop)
+            if interval_mask.sum() > 0:
+                has_nonzero_interval_samples = True
+                break
+        if not has_nonzero_interval_samples and bool(np.any(stops_array > starts_array)):
+            continue
+
         for idx, (start, stop) in enumerate(zip(starts_array, stops_array)):
             if pd.isna(schedule.loc[start, "Target"]):
                 interval_mask = (vis_times >= start) & (vis_times <= stop)
+
+                # Guard: empty mask means no visibility data for this interval.
+                if interval_mask.sum() == 0:
+                    if pd.isna(schedule.loc[start, "Visibility"]):
+                        schedule.loc[start, "Visibility"] = 0
+                        o_df.loc[idx, "Visibility"] = 0
+                    continue
 
                 if np.all(visibility[interval_mask] == 1):
                     schedule.loc[start, "Target"] = v_name
@@ -361,6 +403,15 @@ def schedule_occultation_targets(
 
     if not schedule["Target"].isna().any():
         return o_df, True
+
+    # Pass 2 summary
+    assigned_after_p2 = int(schedule["Target"].notna().sum())
+    LOGGER.debug(
+        "Occultation Pass 2: %d/%d intervals assigned (%d remaining)",
+        assigned_after_p2,
+        total_intervals,
+        total_intervals - assigned_after_p2,
+    )
 
     # PASS 3: Best-effort assignment for intervals not fully covered by any
     # single occultation target. For each remaining interval, choose the
@@ -402,14 +453,27 @@ def schedule_occultation_targets(
 
     # If PASS 3 produced any assignments into o_df, treat this as a valid
     # partial schedule and return it.
-    if "Target" in o_df.columns and o_df["Target"].notna().any():
-        return o_df, True
+    assigned_after_p3 = int(schedule["Target"].notna().sum())
+    LOGGER.debug(
+        "Occultation Pass 3: %d/%d intervals assigned (%d remaining)",
+        assigned_after_p3,
+        total_intervals,
+        total_intervals - assigned_after_p3,
+    )
+    if "Target" in o_df.columns:
+        assigned_values = o_df["Target"]
+        assigned_mask = assigned_values.notna() & (
+            assigned_values.astype(str).str.strip() != ""
+        )
+        if assigned_mask.any():
+            return o_df, True
 
     # PASS 4: For intervals still unassigned, split the interval into minute
     # resolution segments and greedily assign contiguous covered runs to the
     # candidate that covers the longest run. Build a new occ_df with one row
     # per assigned segment and return it if any assignments were made.
     result_rows: list[dict] = []
+    uncovered_minutes = 0
     minute_scale = 1440.0
     for idx, (start, stop) in enumerate(zip(starts_array, stops_array)):
         if not pd.isna(schedule.loc[start, "Target"]):
@@ -441,10 +505,12 @@ def schedule_occultation_targets(
             )
 
         i = 0
+        interval_uncovered = 0
         while i < minutes_idx.size:
             # Find candidates that cover this minute
             available = [name for name, arr in candidate_coverages.items() if arr[i]]
             if not available:
+                interval_uncovered += 1
                 i += 1
                 continue
 
@@ -473,8 +539,6 @@ def schedule_occultation_targets(
 
             # Format start/stop as ISO UTC strings
             try:
-                from astropy.time import Time
-
                 start_dt = Time(run_start_mjd, format="mjd", scale="utc").to_datetime()
                 stop_dt = Time(run_end_mjd, format="mjd", scale="utc").to_datetime()
                 start_str = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -508,9 +572,22 @@ def schedule_occultation_targets(
 
             i += best_len
 
+        uncovered_minutes += interval_uncovered
+
     if result_rows:
+        LOGGER.debug(
+            "Occultation Pass 4: produced %d minute-resolution segments",
+            len(result_rows),
+        )
+        if uncovered_minutes > 0:
+            LOGGER.warning(
+                "Occultation Pass 4: %d uncovered minute(s) detected across intervals",
+                uncovered_minutes,
+            )
         result_df = pd.DataFrame(result_rows)
         return result_df, True
+
+    LOGGER.debug("Occultation Pass 4: no segments assigned — all intervals uncovered")
 
     mask = schedule["Target"].isna()
     schedule.loc[mask, "Target"] = "No target"
@@ -583,7 +660,7 @@ def save_observation_time_report(
                     and requested_hours_by_target[key] != value
                 ):
                     chosen = max(requested_hours_by_target[key], value)
-                    LOGGER.warning(
+                    LOGGER.info(
                         "Conflicting 'Number of Hours Requested' values for %r: %.2f vs %.2f; "
                         "using %.2f",
                         key,
@@ -885,7 +962,12 @@ def create_aux_list(target_definition_files: Sequence[str], package_dir):
     if not target_definition_files:
         raise ValueError("target_definition_files must contain at least one entry")
 
-    data_dir = Path(package_dir) / "data"
+    base_dir = Path(package_dir)
+    candidate_paths = [base_dir / f"{name}_targets.csv" for name in target_definition_files]
+    if any(candidate.exists() for candidate in candidate_paths):
+        data_dir = base_dir
+    else:
+        data_dir = base_dir / "data"
     csv_paths: List[Path] = []
     for name in target_definition_files:
         candidate = data_dir / f"{name}_targets.csv"

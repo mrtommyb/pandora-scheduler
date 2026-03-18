@@ -51,11 +51,13 @@ class TestConfigParameterPropagation:
             window_end=datetime(2026, 1, 2),
             transit_coverage_min=0.35,  # Non-default
             aux_sort_key="closest",  # Non-default
+            primary_only_mode=True,
         )
         
         # Verify config has the parameters we set
         assert config.transit_coverage_min == 0.35
         assert config.aux_sort_key == "closest"
+        assert config.primary_only_mode is True
     
     def test_science_calendar_receives_config_parameters(self, tmp_path):
         """Test that science calendar receives and uses config parameters."""

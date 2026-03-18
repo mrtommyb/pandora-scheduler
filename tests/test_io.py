@@ -1,13 +1,17 @@
 """Unit tests for utils.io module."""
 
+import os
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from pandorascheduler_rework.utils.io import (
     build_star_visibility_path,
     build_visibility_path,
+    load_visibility_arrays_cached,
     read_csv_cached,
+    read_parquet_cached,
     read_planet_visibility_cached,
     read_star_visibility_cached,
 )
@@ -213,3 +217,128 @@ class TestCachePerformance:
         # Values should be equal but not same object
         pd.testing.assert_frame_equal(result1, result2)
         assert result1 is not result2  # Different objects after cache clear
+
+
+class TestReadCsvMtimeInvalidation:
+    """Test CSV cache invalidation on file modification (merged from test_io_mtime_cache)."""
+
+    def test_read_csv_cached_mtime_invalidation(self, tmp_path):
+        """Modified file triggers re-read through mtime-based cache key."""
+        from pandorascheduler_rework.utils import io as io_mod
+
+        p = tmp_path / "sample.csv"
+        p.write_text("a,b\n1,2\n3,4\n")
+        try:
+            io_mod._read_csv_with_mtime.cache_clear()
+        except Exception:
+            pass
+
+        df1 = io_mod.read_csv_cached(str(p))
+        df2 = io_mod.read_csv_cached(str(p))
+        assert df1.equals(df2)
+
+        mtime1 = p.stat().st_mtime
+        p.write_text("a,b\n5,6\n7,8\n")
+        mtime2 = p.stat().st_mtime
+        if mtime2 == mtime1:
+            os.utime(str(p), (mtime1 + 1, mtime1 + 1))
+
+        df3 = io_mod.read_csv_cached(str(p))
+        assert not df3.equals(df2)
+        assert df3.values.tolist() == [[5, 6], [7, 8]]
+
+
+class TestReadParquetCached:
+    """Test Parquet reading with caching."""
+
+    def test_read_parquet_cached_success(self, tmp_path):
+        """Test successful parquet reading."""
+        pq_path = tmp_path / "test.parquet"
+        test_data = pd.DataFrame({"A": [1, 2, 3], "B": [4.0, 5.0, 6.0]})
+        test_data.to_parquet(pq_path, index=False)
+        read_parquet_cached.cache_clear()
+
+        result = read_parquet_cached(str(pq_path))
+        assert result is not None
+        assert len(result) == 3
+        assert list(result.columns) == ["A", "B"]
+
+    def test_read_parquet_cached_nonexistent(self):
+        """Non-existent file returns None."""
+        result = read_parquet_cached("/nonexistent/file.parquet")
+        assert result is None
+
+    def test_read_parquet_cached_column_filter(self, tmp_path):
+        """Parquet read with column subset."""
+        pq_path = tmp_path / "cols.parquet"
+        pd.DataFrame({"X": [1], "Y": [2], "Z": [3]}).to_parquet(pq_path, index=False)
+        read_parquet_cached.cache_clear()
+
+        result = read_parquet_cached(str(pq_path), columns=["X", "Z"])
+        assert result is not None
+        assert list(result.columns) == ["X", "Z"]
+        assert result["X"].iloc[0] == 1
+
+    def test_read_parquet_cached_caching(self, tmp_path):
+        """Same file returns cached object."""
+        pq_path = tmp_path / "cache.parquet"
+        pd.DataFrame({"A": [1]}).to_parquet(pq_path, index=False)
+        read_parquet_cached.cache_clear()
+
+        r1 = read_parquet_cached(str(pq_path))
+        r2 = read_parquet_cached(str(pq_path))
+        assert r1 is r2
+
+    def test_read_parquet_cached_mtime_invalidation(self, tmp_path):
+        """Modified parquet file triggers re-read."""
+        pq_path = tmp_path / "mtime.parquet"
+        pd.DataFrame({"V": [10]}).to_parquet(pq_path, index=False)
+        read_parquet_cached.cache_clear()
+
+        r1 = read_parquet_cached(str(pq_path))
+        mtime1 = pq_path.stat().st_mtime
+
+        pd.DataFrame({"V": [99]}).to_parquet(pq_path, index=False)
+        mtime2 = pq_path.stat().st_mtime
+        if mtime2 == mtime1:
+            os.utime(str(pq_path), (mtime1 + 1, mtime1 + 1))
+
+        r2 = read_parquet_cached(str(pq_path))
+        assert r2["V"].iloc[0] == 99
+
+
+class TestLoadVisibilityArrays:
+    """Test load_visibility_arrays_cached for CSV and parquet."""
+
+    def test_load_from_csv(self, tmp_path):
+        """Load visibility arrays from CSV file."""
+        csv_path = tmp_path / "vis.csv"
+        pd.DataFrame({
+            "Time(MJD_UTC)": [59000.0, 59000.001, 59000.002],
+            "Visible": [1, 0, 1],
+        }).to_csv(csv_path, index=False)
+
+        result = load_visibility_arrays_cached(csv_path)
+        assert result is not None
+        times, flags = result
+        assert len(times) == 3
+        assert flags[1] == 0
+
+    def test_load_from_parquet(self, tmp_path):
+        """Load visibility arrays from parquet file."""
+        pq_path = tmp_path / "vis.parquet"
+        pd.DataFrame({
+            "Time(MJD_UTC)": [59000.0, 59000.001],
+            "Visible": [1, 1],
+        }).to_parquet(pq_path, index=False)
+
+        result = load_visibility_arrays_cached(pq_path)
+        assert result is not None
+        times, flags = result
+        assert len(times) == 2
+        np.testing.assert_array_equal(flags, [1, 1])
+
+    def test_load_missing_file(self, tmp_path):
+        """Missing file returns None."""
+        result = load_visibility_arrays_cached(tmp_path / "no.csv")
+        assert result is None

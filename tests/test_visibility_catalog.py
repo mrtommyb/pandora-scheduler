@@ -36,6 +36,7 @@ def mock_config(tmp_path):
         gmat_ephemeris=tmp_path / "gmat.csv",
         targets_manifest=tmp_path / "targets.csv",
         output_dir=tmp_path / "output",
+        extra_inputs={"data_subdir": "data"},
         force_regenerate=True,
         sun_avoidance_deg=45.0,
         moon_avoidance_deg=30.0,
@@ -199,7 +200,9 @@ def test_build_visibility_catalog_generates_star_and_planet_outputs(tmp_path, mo
         end_mjd = float(row["Transit_Stop"])
         start_dt = mjd_to_datetime(start_mjd).replace(second=0, microsecond=0)
         end_dt = mjd_to_datetime(end_mjd).replace(second=0, microsecond=0)
-        minute_range = pd.date_range(start_dt, end_dt, freq="min").to_pydatetime()
+        # Use half-open [start, end) range to match catalog.py denominator fix
+        n_minutes = int((end_dt - start_dt).total_seconds() // 60)
+        minute_range = pd.date_range(start_dt, periods=n_minutes, freq="min").to_pydatetime()
         if len(minute_range) == 0:
             assert row["Transit_Coverage"] == 0.0
             continue

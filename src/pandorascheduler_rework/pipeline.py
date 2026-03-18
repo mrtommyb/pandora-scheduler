@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from pandorascheduler_rework import observation_utils as rework_helper
-from pandorascheduler_rework.config import PandoraSchedulerConfig
+from pandorascheduler_rework.config import PandoraSchedulerConfig, resolve_data_subdir
 from pandorascheduler_rework.scheduler import (
     SchedulerInputs,
     SchedulerPaths,
@@ -62,10 +62,16 @@ def build_schedule(config: PandoraSchedulerConfig) -> SchedulerResult:
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    data_subdir = resolve_data_subdir(
+        config.extra_inputs,
+        sun_avoidance_deg=config.sun_avoidance_deg,
+        moon_avoidance_deg=config.moon_avoidance_deg,
+        earth_avoidance_deg=config.earth_avoidance_deg,
+    )
+
     # Filesystem layout for this run. Use the run's `output_dir` as the
-    # package root so generated data lives under `<output_dir>/data` which
-    # matches the expectations of downstream components.
-    paths = SchedulerPaths.from_package_root(output_dir)
+    # package root so generated data lives under `<output_dir>/<data_subdir>`.
+    paths = SchedulerPaths.from_package_root(output_dir, data_dir_name=data_subdir)
 
     # Prepare extra_inputs
     extra_inputs = config.extra_inputs
@@ -73,7 +79,7 @@ def build_schedule(config: PandoraSchedulerConfig) -> SchedulerResult:
     # When generating target manifests from a provided target definition base,
     # write the generated CSV manifests into the run's output data directory so
     # subsequent steps (visibility & calendar generation) can find them there.
-    out_data = output_dir / "data"
+    out_data = output_dir / data_subdir
 
     # We need to resolve these paths now to pass to target manifest generation
     # IMPORTANT: Use absolute paths to avoid legacy folder lookups
@@ -285,24 +291,25 @@ def _maybe_generate_visibility(
     monitoring_target_csv: Path,
     occultation_target_csv: Path,
 ) -> None:
-    # Determine whether we should generate visibility.
-    # Default: True when a GMAT ephemeris is provided, or when explicitly requested.
-    generate_visibility = bool(config.gmat_ephemeris) or bool(
-        str(config.extra_inputs.get("generate_visibility", "")).lower()
-        in {"1", "true", "yes", "y"}
-    )
+    # Three-way generate_visibility logic:
+    #   explicit "true"/"yes"/"1"  -> always generate
+    #   explicit "false"/"no"/"0"  -> never generate (even with GMAT)
+    #   unset / empty              -> default to GMAT ephemeris presence
+    raw = str(config.extra_inputs.get("generate_visibility", "")).strip().lower()
+    if raw in {"1", "true", "yes", "y"}:
+        generate_visibility = True
+    elif raw in {"0", "false", "no", "n"}:
+        generate_visibility = False
+    else:
+        generate_visibility = bool(config.gmat_ephemeris)
 
     if not generate_visibility:
         return
 
-    # 1. Primary Targets -> data/targets
+    # 1. Primary Targets -> <data_subdir>/targets
     LOGGER.info(
         "Generating visibility for Primary Targets in %s",
-        (
-            config.output_dir / "data" / "targets"
-            if config.output_dir
-            else "output/data/targets"
-        ),
+        paths.targets_dir if config.output_dir else Path("output") / "data" / "targets",
     )
     build_visibility_catalog(
         config,
@@ -311,14 +318,10 @@ def _maybe_generate_visibility(
         output_subpath="targets",
     )
 
-    # 2. Auxiliary Targets -> data/aux_targets
+    # 2. Auxiliary Targets -> <data_subdir>/aux_targets
     LOGGER.info(
         "Generating visibility for Auxiliary Targets in %s",
-        (
-            config.output_dir / "data" / "aux_targets"
-            if config.output_dir
-            else "output/data/aux_targets"
-        ),
+        paths.aux_targets_dir if config.output_dir else Path("output") / "data" / "aux_targets",
     )
     build_visibility_catalog(
         config,
@@ -327,14 +330,10 @@ def _maybe_generate_visibility(
         output_subpath="aux_targets",
     )
 
-    # 3. Monitoring Targets -> data/aux_targets
+    # 3. Monitoring Targets -> <data_subdir>/aux_targets
     LOGGER.info(
         "Generating visibility for Monitoring Targets in %s",
-        (
-            config.output_dir / "data" / "aux_targets"
-            if config.output_dir
-            else "output/data/aux_targets"
-        ),
+        paths.aux_targets_dir if config.output_dir else Path("output") / "data" / "aux_targets",
     )
     build_visibility_catalog(
         config,
@@ -343,14 +342,10 @@ def _maybe_generate_visibility(
         output_subpath="aux_targets",
     )
 
-    # 3. Occultation Targets -> data/aux_targets
+    # 4. Occultation Targets -> <data_subdir>/aux_targets
     LOGGER.info(
         "Generating visibility for Occultation Targets in %s",
-        (
-            config.output_dir / "data" / "aux_targets"
-            if config.output_dir
-            else "output/data/aux_targets"
-        ),
+        paths.aux_targets_dir if config.output_dir else Path("output") / "data" / "aux_targets",
     )
     build_visibility_catalog(
         config,
@@ -369,14 +364,14 @@ def _generate_target_manifests(
     occultation_target_csv: Path,
 ) -> None:
     mapping = {
-        0: primary_target_csv,
-        1: auxiliary_target_csv,
-        2: monitoring_target_csv,
-        3: occultation_target_csv,
+        "exoplanet": primary_target_csv,
+        "auxiliary-standard": auxiliary_target_csv,
+        "monitoring-standard": monitoring_target_csv,
+        "occultation-standard": occultation_target_csv,
     }
 
-    for index, category in enumerate(target_definition_files):
-        destination = mapping.get(index)
+    for category in target_definition_files:
+        destination = mapping.get(str(category))
         if destination is None:
             continue
 
@@ -389,7 +384,7 @@ def _generate_target_manifests(
 
     rework_helper.create_aux_list(
         target_definition_files,
-        primary_target_csv.parent.parent,
+        primary_target_csv.parent,
     )
 
 

@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
+
+import pandas as pd
 
 from pandorascheduler_rework.config import PandoraSchedulerConfig
 from pandorascheduler_rework.pipeline import (
     SchedulerPaths,
+    build_schedule,
     _maybe_generate_visibility,
 )
 
@@ -165,6 +169,76 @@ def test_maybe_generate_visibility_skips_without_flag(monkeypatch, tmp_path):
     )
 
     assert not called
+
+
+def test_build_schedule_routes_all_paths_via_data_subdir(monkeypatch, tmp_path):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    target_df = pd.DataFrame(
+        [
+            {
+                "Planet Name": "Demo b",
+                "Star Name": "Demo",
+                "Primary Target": True,
+                "RA": 10.0,
+                "DEC": 20.0,
+                "Obs Window (hrs)": 24.0,
+                "Transit Duration (hrs)": 3.0,
+                "Number of Transits to Capture": 0,
+            }
+        ]
+    )
+
+    config = PandoraSchedulerConfig(
+        targets_manifest=output_dir,
+        window_start=datetime(2026, 2, 5),
+        window_end=datetime(2027, 2, 5),
+        output_dir=output_dir,
+        extra_inputs={
+            "data_subdir": "data_test_run",
+            "skip_manifests": True,
+        },
+    )
+
+    monkeypatch.setattr(
+        "pandorascheduler_rework.pipeline.read_csv_cached",
+        lambda _path: target_df,
+    )
+    monkeypatch.setattr(
+        "pandorascheduler_rework.pipeline._maybe_generate_visibility",
+        lambda *args, **kwargs: None,
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_run_scheduler(inputs, _config):
+        captured["inputs"] = inputs
+        return SimpleNamespace(
+            schedule=target_df,
+            tracker=pd.DataFrame(),
+            observation_report_path=None,
+            schedule_path=output_dir / "schedule.csv",
+            tracker_csv_path=None,
+            tracker_pickle_path=None,
+        )
+
+    monkeypatch.setattr(
+        "pandorascheduler_rework.pipeline.run_scheduler",
+        fake_run_scheduler,
+    )
+
+    result = build_schedule(config)
+
+    assert result.schedule_csv == output_dir / "schedule.csv"
+
+    inputs = captured["inputs"]
+    assert inputs.paths.data_dir == output_dir / "data_test_run"
+    assert inputs.paths.targets_dir == output_dir / "data_test_run" / "targets"
+    assert inputs.paths.aux_targets_dir == output_dir / "data_test_run" / "aux_targets"
+    assert inputs.primary_target_csv == output_dir / "data_test_run" / "exoplanet_targets.csv"
+    assert inputs.auxiliary_target_csv == output_dir / "data_test_run" / "auxiliary-standard_targets.csv"
+    assert inputs.occultation_target_csv == output_dir / "data_test_run" / "occultation-standard_targets.csv"
 
 
 # test_build_visibility_config_supports_overrides removed as _build_visibility_config was removed

@@ -13,6 +13,7 @@ have shape ``(N,)``.
 from __future__ import annotations
 
 import logging
+import warnings
 from typing import Optional
 
 import numpy as np
@@ -70,6 +71,11 @@ def fast_limb_deg(
 ) -> np.ndarray:
     """Angular distance from the Earth's limb to a target (degrees).
 
+    Used for **star-tracker** Earth-limb keepout (limb-angle geometry).
+    This is intentionally different from the boresight Earth-avoidance model
+    which uses centre-of-Earth angular separation.  See the dual Earth-avoidance
+    model note in ``config.py`` (``earth_avoidance_deg`` docstring).
+
     This replicates ``pandoravisibility.Visibility._fast_limb_deg``.
 
     Parameters
@@ -96,6 +102,7 @@ def earthlimb_is_sunlit(
     nadir_unit: np.ndarray,
     sun_unit: np.ndarray,
     limb_angle_rad: Optional[np.ndarray] = None,
+    twilight_margin_deg: float = 0.0,
 ) -> np.ndarray:
     """Determine whether the nearest Earth-limb point to the target is sunlit.
 
@@ -105,7 +112,7 @@ def earthlimb_is_sunlit(
 
     where *limb_dir* is the projection of the target direction onto the plane
     perpendicular to the zenith, and *limb_angle* = arccos(R_earth / d).
-    The limb point is sunlit when ``dot(n, sun) > 0``.
+    The limb point is sunlit when ``dot(n, sun) > -sin(twilight_margin)``.
 
     Parameters
     ----------
@@ -119,6 +126,10 @@ def earthlimb_is_sunlit(
         Earth-limb half-angle in radians (``arccos(R_earth / d)``).
         When *None*, falls back to a horizontal projection only
         (legacy behaviour, ignoring the zenith component).
+    twilight_margin_deg : float
+        Degrees past the geometric terminator to still classify as
+        sunlit.  0 (default) reproduces the original sharp terminator.
+        18 is analogous to astronomical twilight.
 
     Returns
     -------
@@ -137,9 +148,11 @@ def earthlimb_is_sunlit(
     proj_norm = np.where(proj_norm == 0, 1.0, proj_norm)
     limb_dir = proj / proj_norm  # unit direction to nearest limb point (N, 3)
 
+    threshold = -np.sin(np.deg2rad(twilight_margin_deg))
+
     if limb_angle_rad is None:
         # Legacy fallback: horizontal projection only
-        return np.einsum("ij,ij->i", limb_dir, sun_unit) > 0
+        return np.einsum("ij,ij->i", limb_dir, sun_unit) > threshold
 
     # Full surface-normal check: n = cos(θ)*zenith + sin(θ)*limb_dir
     cos_la = np.cos(limb_angle_rad)
@@ -149,7 +162,7 @@ def earthlimb_is_sunlit(
         cos_la * np.einsum("ij,ij->i", zenith, sun_unit)
         + sin_la * np.einsum("ij,ij->i", limb_dir, sun_unit)
     )
-    return dot_n_sun > 0
+    return dot_n_sun > threshold
 
 
 def effective_earth_threshold(
@@ -160,8 +173,13 @@ def effective_earth_threshold(
     night_deg: Optional[float],
     default_deg: float,
     limb_angle_rad: Optional[np.ndarray] = None,
+    twilight_margin_deg: float = 0.0,
 ) -> np.ndarray | float:
-    """Per-timestep Earth-avoidance threshold (degrees).
+    """Per-timestep **boresight** Earth-avoidance threshold (degrees).
+
+    Applies centre-of-Earth angular separation geometry (not limb-angle).
+    Star-tracker Earth keepout uses a separate limb-angle model via
+    ``fast_limb_deg()`` — the two are not interchangeable.
 
     When both *day_deg* and *night_deg* are ``None`` returns the scalar
     *default_deg* (no per-timestep branch needed).  Otherwise returns an
@@ -174,13 +192,27 @@ def effective_earth_threshold(
         Earth-limb half-angle in radians, forwarded to
         ``earthlimb_is_sunlit``.  Required for correct geometry;
         when *None* falls back to legacy horizontal-projection-only.
+    twilight_margin_deg : float
+        Degrees past the geometric terminator to classify as sunlit,
+        forwarded to ``earthlimb_is_sunlit``.  0 = sharp terminator.
     """
     if day_deg is None and night_deg is None:
+        if twilight_margin_deg > 0:
+            warnings.warn(
+                f"twilight_margin_deg={twilight_margin_deg:.1f} has no effect: "
+                "earth_avoidance_day_deg and earth_avoidance_night_deg are both "
+                "None. Set at least one to enable day/night Earth-avoidance "
+                "switching.",
+                UserWarning,
+                stacklevel=2,
+            )
         return default_deg
     day = day_deg if day_deg is not None else default_deg
     night = night_deg if night_deg is not None else default_deg
     sunlit = earthlimb_is_sunlit(
-        target_unit, nadir_unit, sun_unit, limb_angle_rad=limb_angle_rad
+        target_unit, nadir_unit, sun_unit,
+        limb_angle_rad=limb_angle_rad,
+        twilight_margin_deg=twilight_margin_deg,
     )
     return np.where(sunlit, day, night)
 
@@ -543,6 +575,7 @@ def compute_visibility_with_constraints(
     nadir_unit: np.ndarray,
     sun_unit: np.ndarray,
     moon_unit: np.ndarray,
+    observer_dist_km: Optional[np.ndarray],
     zenith_unit: np.ndarray,
     limb_angle_rad: np.ndarray,
     orbit_slices: list[slice],
@@ -558,6 +591,9 @@ def compute_visibility_with_constraints(
     ----------
     target_unit : ndarray ``(N, 3)``
     nadir_unit, sun_unit, moon_unit, zenith_unit : ndarray ``(N, 3)``
+    observer_dist_km : ndarray ``(N,)`` or None
+        Retained for backward compatibility; limb geometry currently uses
+        ``limb_angle_rad`` directly.
     limb_angle_rad : ndarray ``(N,)``
     orbit_slices : list of slice
     earth_center_sep_deg : ndarray ``(N,)``
@@ -589,6 +625,7 @@ def compute_visibility_with_constraints(
         config.earth_avoidance_night_deg,
         config.earth_avoidance_deg,
         limb_angle_rad=limb_angle_rad,
+        twilight_margin_deg=config.twilight_margin_deg,
     )
     earth_ok = earth_center_sep_deg > earth_threshold
 

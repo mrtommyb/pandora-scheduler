@@ -32,8 +32,8 @@ def regenerate_calendar(output_dir_str: str, use_legacy_mode: bool = False):
 
     # Dummy dates - XML generation extracts dates from the schedule CSV
     config = PandoraSchedulerConfig(
-        window_start=datetime(2026, 1, 1),
-        window_end=datetime(2027, 1, 1),
+        window_start=datetime(2026, 2, 1),
+        window_end=datetime(2027, 2, 2),
         use_legacy_mode=use_legacy_mode,
     )
 
@@ -48,4 +48,4 @@ def regenerate_calendar(output_dir_str: str, use_legacy_mode: bool = False):
 
 if __name__ == "__main__":
     use_legacy = "--legacy-mode" in sys.argv or "-l" in sys.argv
-    regenerate_calendar("output_standalone", use_legacy_mode=use_legacy)
+    regenerate_calendar("output_standalone_test", use_legacy_mode=use_legacy)

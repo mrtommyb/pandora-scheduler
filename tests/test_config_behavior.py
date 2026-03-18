@@ -78,6 +78,7 @@ class TestVisibilityParameterBehavior:
             gmat_ephemeris=gmat_path,
             targets_manifest=target_path,
             output_dir=tmp_path / "lenient",
+            extra_inputs={"data_subdir": "data"},
             sun_avoidance_deg=45.0,   # Lenient
             moon_avoidance_deg=20.0,  # Lenient
             earth_avoidance_deg=15.0, # Lenient
@@ -91,6 +92,7 @@ class TestVisibilityParameterBehavior:
             gmat_ephemeris=gmat_path,
             targets_manifest=target_path,
             output_dir=tmp_path / "strict",
+            extra_inputs={"data_subdir": "data"},
             sun_avoidance_deg=100.0,  # Very strict
             moon_avoidance_deg=45.0,  # Strict
             earth_avoidance_deg=30.0, # Strict
@@ -169,6 +171,7 @@ class TestVisibilityParameterBehavior:
             gmat_ephemeris=gmat_path,
             targets_manifest=target_path,
             output_dir=output_dir,
+            extra_inputs={"data_subdir": "data"},
             force_regenerate=True,
             sun_avoidance_deg=45.0,
             moon_avoidance_deg=30.0,
@@ -199,6 +202,7 @@ class TestVisibilityParameterBehavior:
             gmat_ephemeris=gmat_path,
             targets_manifest=target_path,
             output_dir=output_dir,
+            extra_inputs={"data_subdir": "data"},
             force_regenerate=True,
             sun_avoidance_deg=45.0,
             moon_avoidance_deg=30.0,
@@ -233,6 +237,7 @@ class TestVisibilityParameterBehavior:
             gmat_ephemeris=gmat_path,
             targets_manifest=target_path,
             output_dir=output_dir,
+            extra_inputs={"data_subdir": "data"},
             force_regenerate=False,  # Don't force
             sun_avoidance_deg=45.0,
             moon_avoidance_deg=30.0,
