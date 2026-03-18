@@ -518,13 +518,13 @@ def _compute_planet_transits(
     if t_mjd.size == 0:
         return pd.DataFrame(
             {
-                col: np.array([], dtype=float)
-                for col in [
-                    "Transits",
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                ]
+                "Transits": np.array([], dtype=float),
+                "Transit_Start": np.array([], dtype=float),
+                "Transit_Stop": np.array([], dtype=float),
+                "Transit_Start_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Stop_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Coverage": np.array([], dtype=float),
+                "SAA_Overlap": np.array([], dtype=float),
             }
         )
 
@@ -540,13 +540,13 @@ def _compute_planet_transits(
         )
         return pd.DataFrame(
             {
-                col: np.array([], dtype=float)
-                for col in [
-                    "Transits",
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                ]
+                "Transits": np.array([], dtype=float),
+                "Transit_Start": np.array([], dtype=float),
+                "Transit_Stop": np.array([], dtype=float),
+                "Transit_Start_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Stop_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Coverage": np.array([], dtype=float),
+                "SAA_Overlap": np.array([], dtype=float),
             }
         )
 
@@ -582,13 +582,13 @@ def _compute_planet_transits(
         )
         return pd.DataFrame(
             {
-                col: np.array([], dtype=float)
-                for col in [
-                    "Transits",
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                ]
+                "Transits": np.array([], dtype=float),
+                "Transit_Start": np.array([], dtype=float),
+                "Transit_Stop": np.array([], dtype=float),
+                "Transit_Start_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Stop_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Coverage": np.array([], dtype=float),
+                "SAA_Overlap": np.array([], dtype=float),
             }
         )
 
@@ -608,13 +608,13 @@ def _compute_planet_transits(
     if not mid_transits_list:
         return pd.DataFrame(
             {
-                col: np.array([], dtype=float)
-                for col in [
-                    "Transits",
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                ]
+                "Transits": np.array([], dtype=float),
+                "Transit_Start": np.array([], dtype=float),
+                "Transit_Stop": np.array([], dtype=float),
+                "Transit_Start_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Stop_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Coverage": np.array([], dtype=float),
+                "SAA_Overlap": np.array([], dtype=float),
             }
         )
 
@@ -642,7 +642,11 @@ def _compute_planet_transits(
     saa_overlap = np.zeros(len(start_datetimes), dtype=float)
 
     for idx, (start_dt, end_dt) in enumerate(zip(start_datetimes, end_datetimes)):
-        tran_minutes = pd.date_range(start_dt, end_dt, freq="min").to_pydatetime()
+        # Use periods= to generate a half-open [start, end) range so the
+        # denominator equals the number of 1-minute intervals, not N+1 (the
+        # inclusive pd.date_range default would give off-by-one coverage).
+        n_minutes = int((end_dt - start_dt).total_seconds() // 60)
+        tran_minutes = pd.date_range(start_dt, periods=n_minutes, freq="min").to_pydatetime()
         if len(tran_minutes) == 0:
             continue
         minute_set = set(tran_minutes)
@@ -695,13 +699,14 @@ def _apply_transit_overlaps(
             if not planet_path.exists():
                 all_have_overlap = False
                 break
-            # Quick check: just read the header line to see if Transit_Overlap exists
+            # Quick check via parquet schema metadata.
             try:
-                with open(planet_path, "r") as f:
-                    header = f.readline().strip()
-                    if "Transit_Overlap" not in header:
-                        all_have_overlap = False
-                        break
+                import pyarrow.parquet as pq
+
+                schema = pq.read_schema(planet_path)
+                if "Transit_Overlap" not in schema.names:
+                    all_have_overlap = False
+                    break
             except Exception:
                 all_have_overlap = False
                 break
@@ -722,12 +727,6 @@ def _apply_transit_overlaps(
                 )
             df = read_parquet_cached(
                 str(planet_path),
-                columns=[
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                    "SAA_Overlap",
-                ],
             )
             if df is None:
                 raise FileNotFoundError(
@@ -758,10 +757,11 @@ def _apply_transit_overlaps(
                     Time(end_mjd, format="mjd", scale="utc").to_datetime()
                 ).dt.floor("min")
 
-            # Build minute sets for each transit
+            # Build minute sets for each transit (half-open [start, end)).
             for start_dt, end_dt in zip(start_times, end_times):
+                n_minutes = int((end_dt - start_dt).total_seconds() // 60)
                 minutes = list(
-                    pd.date_range(start_dt, end_dt, freq="min").to_pydatetime()
+                    pd.date_range(start_dt, periods=n_minutes, freq="min").to_pydatetime()
                 )
                 if not minutes:
                     sets.append((set(), 0))

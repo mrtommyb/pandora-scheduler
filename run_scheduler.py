@@ -155,6 +155,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Earth avoidance when nearest limb is in shadow (degrees). None = use --earth-avoidance uniformly.",
     )
+    parser.add_argument(
+        "--twilight-margin",
+        type=float,
+        default=0.0,
+        help="Degrees past geometric terminator to classify as sunlit for day/night keepout (default: 0 = sharp terminator).",
+    )
 
     # Star tracker keepout configuration
     parser.add_argument(
@@ -286,9 +292,9 @@ def parse_args() -> argparse.Namespace:
         help="Skip Pass 1 in occultation assignment (single target must cover all intervals)",
     )
     parser.add_argument(
-        "--relaxed-occultation-time-limits",
+        "--requested-occ-time-override",
         action="store_true",
-        help="Allow occultation scheduling to continue when time-limit data is incomplete",
+        help="Allow occultation scheduling to continue when requested-hours has been met",
     )
 
     # Profiling configuration
@@ -646,11 +652,13 @@ def main() -> int:
             ).lower()
             in {"1", "true", "yes", "y"}
         )
-        # `config` is not yet constructed here, so check the CLI/ENV visibility GMAT
+        # `config` is not yet constructed here, so validate the CLI/JSON inputs now
         if generate_visibility and visibility_gmat is None:
-            logger.warning(
-                "Visibility generation requested but no GMAT ephemeris provided."
+            logger.error(
+                "Visibility generation requested but no GMAT ephemeris provided. "
+                "Supply --gmat-ephemeris or set extra_inputs.visibility_gmat in the JSON config."
             )
+            return 1
 
         # Build PandoraSchedulerConfig with the dataclass field names and types
         schedule_step_hours = float(
@@ -730,6 +738,10 @@ def main() -> int:
         _raw_night = _get_val("earth_avoidance_night_deg", args.earth_avoidance_night, None)
         earth_avoid_night = float(_raw_night) if _raw_night is not None else None
 
+        twilight_margin = float(
+            _get_val("twilight_margin_deg", args.twilight_margin, 0.0)
+        )
+
         # Star tracker keepouts
         st_sun_min = float(
             _get_val("st_sun_min_deg", args.st_sun_min, 0.0)
@@ -775,7 +787,7 @@ def main() -> int:
         )
 
         obs_sequence_duration_min = int(_get_val("obs_sequence_duration_min", None, 90))
-        occ_sequence_limit_min = int(_get_val("occ_sequence_limit_min", None, 20))
+        occ_sequence_limit_min = int(_get_val("occ_sequence_limit_min", None, 40))
         min_sequence_minutes = int(_get_val("min_sequence_minutes", args.min_sequence_minutes, 8))
 
         std_obs_duration_hours = float(_get_val("std_obs_duration_hours", None, 0.5))
@@ -814,13 +826,13 @@ def main() -> int:
             ),
             True,
         )
-        strict_occultation_time_limits = _as_bool(
+        requested_occ_time_override = _as_bool(
             _get_val(
-                "strict_occultation_time_limits",
-                not args.relaxed_occultation_time_limits if args.relaxed_occultation_time_limits else None,
-                True,
+                "requested_occ_time_override",
+                True if args.requested_occ_time_override else None,
+                None,
             ),
-            True,
+            False,
         )
 
         commissioning_days = int(_get_val("commissioning_days", None, 0))
@@ -864,6 +876,7 @@ def main() -> int:
             earth_avoidance_deg=earth_avoid,
             earth_avoidance_day_deg=earth_avoid_day,
             earth_avoidance_night_deg=earth_avoid_night,
+            twilight_margin_deg=twilight_margin,
             # Star tracker keepouts
             st_sun_min_deg=st_sun_min,
             st_moon_min_deg=st_moon_min,
@@ -892,7 +905,7 @@ def main() -> int:
             prioritise_occultations_by_slew=prioritise_occultations_by_slew,
             enable_occultation_xml=enable_occultation_xml,
             enable_occultation_pass1=enable_occultation_pass1,
-            strict_occultation_time_limits=strict_occultation_time_limits,
+            requested_occ_time_override=requested_occ_time_override,
             use_legacy_mode=use_legacy_mode,
             parallel_workers=parallel_workers,
             # Sorting / metadata
@@ -921,7 +934,7 @@ def main() -> int:
         logger.info("PRIMARY_ONLY_MODE=%s", str(primary_only_mode).upper())
         logger.info("GENERATE_OCCULTATION_XML=%s", str(enable_occultation_xml).upper())
         logger.info("OCCULTATION_PASS1=%s", str(enable_occultation_pass1).upper())
-        logger.info("STRICT_OCCULTATION_TIME_LIMITS=%s", str(strict_occultation_time_limits).upper())
+        logger.info("REQUESTED_OCC_TIME_OVERRIDE=%s", str(requested_occ_time_override).upper())
         logger.info("Starting scheduler pipeline...")
         if args.legacy_mode:
             logger.info("Legacy mode enabled - using MJD-based visibility filtering")

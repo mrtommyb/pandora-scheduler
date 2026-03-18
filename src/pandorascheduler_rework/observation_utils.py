@@ -377,6 +377,13 @@ def schedule_occultation_targets(
             if pd.isna(schedule.loc[start, "Target"]):
                 interval_mask = (vis_times >= start) & (vis_times <= stop)
 
+                # Guard: empty mask means no visibility data for this interval.
+                if interval_mask.sum() == 0:
+                    if pd.isna(schedule.loc[start, "Visibility"]):
+                        schedule.loc[start, "Visibility"] = 0
+                        o_df.loc[idx, "Visibility"] = 0
+                    continue
+
                 if np.all(visibility[interval_mask] == 1):
                     schedule.loc[start, "Target"] = v_name
                     schedule.loc[start, "Visibility"] = 1
@@ -532,8 +539,6 @@ def schedule_occultation_targets(
 
             # Format start/stop as ISO UTC strings
             try:
-                from astropy.time import Time
-
                 start_dt = Time(run_start_mjd, format="mjd", scale="utc").to_datetime()
                 stop_dt = Time(run_end_mjd, format="mjd", scale="utc").to_datetime()
                 start_str = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -655,7 +660,7 @@ def save_observation_time_report(
                     and requested_hours_by_target[key] != value
                 ):
                     chosen = max(requested_hours_by_target[key], value)
-                    LOGGER.warning(
+                    LOGGER.info(
                         "Conflicting 'Number of Hours Requested' values for %r: %.2f vs %.2f; "
                         "using %.2f",
                         key,

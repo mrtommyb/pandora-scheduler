@@ -1,0 +1,108 @@
+"""Tests for pipeline.py helper functions (coverage gap)."""
+
+from pathlib import Path
+
+import pytest
+
+from pandorascheduler_rework.pipeline import (
+    _as_bool,
+    _coerce_optional_path,
+    _coerce_path,
+    _resolve_target_definition_files,
+    _target_definition_from_csv,
+)
+
+
+class TestCoercePath:
+    def test_none_returns_default(self):
+        default = Path("/fallback")
+        assert _coerce_path(None, default) == default
+
+    def test_string_converted(self):
+        result = _coerce_path("some/dir", Path("/default"))
+        assert isinstance(result, Path)
+        assert result.is_absolute()
+
+    def test_path_passthrough(self):
+        result = _coerce_path(Path("/absolute/path"), Path("/default"))
+        assert result == Path("/absolute/path")
+
+
+class TestCoerceOptionalPath:
+    def test_none_returns_none(self):
+        assert _coerce_optional_path(None) is None
+
+    def test_string_converted(self):
+        result = _coerce_optional_path("some/path")
+        assert isinstance(result, Path)
+        assert result.is_absolute()
+
+
+class TestResolveTargetDefinitionFiles:
+    def test_none_uses_fallback(self):
+        result = _resolve_target_definition_files(None, ["exoplanet", "auxiliary-standard"])
+        assert result == ["exoplanet", "auxiliary-standard"]
+
+    def test_list_passthrough(self):
+        result = _resolve_target_definition_files(["a", "b"], [])
+        assert result == ["a", "b"]
+
+    def test_tuple_converted(self):
+        result = _resolve_target_definition_files(("x", "y"), [])
+        assert result == ["x", "y"]
+
+    def test_comma_separated_string(self):
+        result = _resolve_target_definition_files("exoplanet, auxiliary-standard", [])
+        assert result == ["exoplanet", "auxiliary-standard"]
+
+    def test_single_string(self):
+        result = _resolve_target_definition_files("exoplanet", [])
+        assert result == ["exoplanet"]
+
+    def test_invalid_type_raises(self):
+        with pytest.raises(TypeError):
+            _resolve_target_definition_files(42, [])
+
+
+class TestTargetDefinitionFromCsv:
+    def test_strips_targets_suffix(self):
+        assert _target_definition_from_csv(Path("exoplanet_targets.csv")) == "exoplanet"
+
+    def test_no_suffix(self):
+        assert _target_definition_from_csv(Path("custom.csv")) == "custom"
+
+    def test_nested_path(self):
+        assert _target_definition_from_csv(Path("/data/output/auxiliary-standard_targets.csv")) == "auxiliary-standard"
+
+
+class TestAsBool:
+    def test_none_returns_default(self):
+        assert _as_bool(None, True) is True
+        assert _as_bool(None, False) is False
+
+    def test_bool_passthrough(self):
+        assert _as_bool(True, False) is True
+        assert _as_bool(False, True) is False
+
+    def test_string_true_values(self):
+        for val in ("1", "true", "True", "yes", "y", "on", "YES"):
+            assert _as_bool(val, False) is True
+
+    def test_string_false_values(self):
+        for val in ("0", "false", "no", "off"):
+            assert _as_bool(val, True) is False
+
+    def test_empty_string_returns_default(self):
+        assert _as_bool("", True) is True
+        assert _as_bool("  ", False) is False
+
+    def test_int_values(self):
+        assert _as_bool(1, False) is True
+        assert _as_bool(0, True) is False
+
+    def test_float_values(self):
+        assert _as_bool(1.0, False) is True
+        assert _as_bool(0.0, True) is False
+
+    def test_other_type_returns_default(self):
+        assert _as_bool([], True) is True

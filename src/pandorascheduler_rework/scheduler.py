@@ -26,6 +26,19 @@ from pandorascheduler_rework.utils.io import (
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
+# ---------------------------------------------------------------------------
+# Transit Factor thresholds — intentionally distinct, do not unify.
+# ---------------------------------------------------------------------------
+# TOO_OVERRIDE_THRESHOLD: transit_ratio = transits_left_lifetime / transits_needed.
+#   When this ratio ≤ 1.0 the spacecraft has no margin — every remaining
+#   observable transit must be captured.  Triggers a forced Target-of-Opportunity
+#   override that bypasses normal scheduling priority.
+# URGENCY_THRESHOLD: when ANY candidate's Transit Factor ≤ 1.2 the window sort
+#   switches to urgency-first (ascending TF) so the most time-pressured target
+#   is preferred over pure quality-factor ranking.
+_TOO_OVERRIDE_THRESHOLD = 1.0
+_URGENCY_THRESHOLD = 1.2
+
 
 def _filter_visibility_by_time(
     vis: pd.DataFrame,
@@ -667,7 +680,7 @@ def _handle_targets_of_opportunity(
         tracker.loc[positive_needed, "Transits Left in Lifetime"]
         / tracker.loc[positive_needed, "Transits Needed"]
     )
-    critical_planets = tracker.loc[positive_needed & (transit_ratio <= 1)].copy()
+    critical_planets = tracker.loc[positive_needed & (transit_ratio <= _TOO_OVERRIDE_THRESHOLD)].copy()
 
     schedule_parts: list[pd.DataFrame] = []
     forced_observation = False
@@ -1366,7 +1379,7 @@ def _schedule_primary_target(
     # We intentionally make this dominate over quality in the non-critical case.
     full_coverage = temp_df["Transit Coverage"].astype(float) >= 0.999999
 
-    if (temp_df["Transit Factor"] <= 2).any():
+    if (temp_df["Transit Factor"] <= _URGENCY_THRESHOLD).any():
         # Critical case: urgency still wins, but prefer full coverage when urgency ties.
         ranked = (
             temp_df.assign(_full_coverage=full_coverage)

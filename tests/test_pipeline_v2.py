@@ -12,49 +12,8 @@ from pandorascheduler_rework.pipeline import build_schedule
 class TestBuildScheduleV2:
     """Test the v2 pipeline API with PandoraSchedulerConfig."""
 
-    def test_requires_valid_config(self):
-        """Test that invalid config raises validation errors."""
-        with pytest.raises(ValueError, match="transit_scheduling_weights must sum to 1.0"):
-            PandoraSchedulerConfig(
-                window_start=datetime(2026, 2, 5),
-                window_end=datetime(2026, 2, 19),
-                targets_manifest=Path("data"),
-                transit_scheduling_weights=(0.5, 0.5, 0.5),  # Invalid: sums to 1.5
-            )
-
-    def test_validates_transit_coverage_range(self):
-        """Test that transit_coverage_min is validated."""
-        with pytest.raises(ValueError, match="transit_coverage_min must be in"):
-            PandoraSchedulerConfig(
-                window_start=datetime(2026, 2, 5),
-                window_end=datetime(2026, 2, 19),
-                targets_manifest=Path("data"),
-                transit_coverage_min=1.5,  # Invalid: > 1.0
-            )
-
-    def test_config_has_sensible_defaults(self):
-        """Test that config has reasonable defaults."""
-        config = PandoraSchedulerConfig(
-            window_start=datetime(2026, 2, 5),
-            window_end=datetime(2026, 2, 19),
-            targets_manifest=Path("data"),
-        )
-        
-        assert config.transit_coverage_min == 0.2
-        assert config.transit_scheduling_weights == (0.8, 0.0, 0.2)
-        assert config.show_progress is False
-        assert config.sun_avoidance_deg == 91.0
-
-    def test_config_is_immutable(self):
-        """Test that config is frozen (immutable)."""
-        config = PandoraSchedulerConfig(
-            window_start=datetime(2026, 2, 5),
-            window_end=datetime(2026, 2, 19),
-            targets_manifest=Path("data"),
-        )
-        
-        with pytest.raises(Exception):  # FrozenInstanceError
-            config.transit_coverage_min = 0.5  # type: ignore
+    # Config validation tests (test_requires_valid_config, test_validates_transit_coverage_range,
+    # test_config_has_sensible_defaults, test_config_is_immutable) consolidated into test_config.py
 
 # Legacy conversion tests removed
 

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "pandora-scheduler"
-version = "0.1.0"
+version = "1.1.0"
 description = "Pandora mission scheduling pipeline and rework sandbox"
 authors = ["Pandora Scheduler Developers <pandora-dev@example.com>"]
 packages = [
@@ -30,6 +30,8 @@ optional = true
 pandoravisibility = { git = "https://github.com/PandoraMission/pandora-visibility.git" }
 
 [tool.pytest.ini_options]
+log_cli = false
+log_cli_level = "WARNING"
 filterwarnings = [
   "ignore:ERFA function 'pmsafe' yielded 1 of 'distance overridden (Note 6)':erfa.ErfaWarning"
 ]
