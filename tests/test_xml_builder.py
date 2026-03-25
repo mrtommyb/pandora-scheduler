@@ -188,11 +188,8 @@ def test_generate_science_calendar_splits_long_occultations(tmp_path, monkeypatc
     planet_dir.mkdir(parents=True, exist_ok=True)
     # use the minute-resolution planet transit visibility written above
 
-    # Create visibility for OccA and OccB
-    for star in ["OccA", "OccB"]:
-        vis_dir = data_dir / "aux_targets" / star
-        vis_dir.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame({"Time(MJD_UTC)": [61041.0, 61043.0], "Visible": [1, 1]}).to_parquet(vis_dir / f"Visibility for {star}.parquet", index=False)
+    # OccA and OccB aux_targets visibility already written by
+    # _write_visibility above with correct minute-resolution data.
 
     pd.DataFrame(
         [

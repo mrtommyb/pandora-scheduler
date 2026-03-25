@@ -165,6 +165,39 @@ def earthlimb_is_sunlit(
     return dot_n_sun > threshold
 
 
+def subsatellite_is_sunlit(
+    nadir_unit: np.ndarray,
+    sun_unit: np.ndarray,
+    twilight_margin_deg: float = 0.0,
+) -> np.ndarray:
+    """Whether the subsatellite point (ground below spacecraft) is sunlit.
+
+    The subsatellite point is on Earth's surface directly below the
+    spacecraft.  It is sunlit when the zenith direction (away from
+    Earth centre) and the Sun direction are on the same hemisphere:
+
+        ``dot(zenith, sun) > -sin(twilight_margin)``
+
+    Parameters
+    ----------
+    nadir_unit : ndarray, shape ``(N, 3)``
+        Unit direction from observer toward Earth centre.
+    sun_unit : ndarray, shape ``(N, 3)``
+        Unit direction from observer toward the Sun.
+    twilight_margin_deg : float
+        Degrees past the geometric terminator to classify as sunlit.
+        0 (default) gives a sharp day/night boundary.
+
+    Returns
+    -------
+    ndarray, shape ``(N,)`` of bool
+    """
+    zenith = -nadir_unit
+    threshold = -np.sin(np.deg2rad(twilight_margin_deg))
+    dot_zs = np.einsum("ij,ij->i", zenith, sun_unit)
+    return dot_zs > threshold
+
+
 def effective_earth_threshold(
     target_unit: np.ndarray,
     nadir_unit: np.ndarray,
@@ -174,6 +207,7 @@ def effective_earth_threshold(
     default_deg: float,
     limb_angle_rad: Optional[np.ndarray] = None,
     twilight_margin_deg: float = 0.0,
+    daynight_mode: str = "subsatellite",
 ) -> np.ndarray | float:
     """Per-timestep **boresight** Earth-avoidance threshold (degrees).
 
@@ -183,8 +217,14 @@ def effective_earth_threshold(
 
     When both *day_deg* and *night_deg* are ``None`` returns the scalar
     *default_deg* (no per-timestep branch needed).  Otherwise returns an
-    ``(N,)`` array with the day value where the limb is sunlit and the night
+    ``(N,)`` array with the day value where it is day and the night
     value where it is not.
+
+    The method used to determine day vs night is controlled by
+    *daynight_mode*:
+
+    * ``"subsatellite"`` (default): subsatellite point directly below spacecraft.
+    * ``"limb"``: nearest limb point in the target direction.
 
     Parameters
     ----------
@@ -195,6 +235,8 @@ def effective_earth_threshold(
     twilight_margin_deg : float
         Degrees past the geometric terminator to classify as sunlit,
         forwarded to ``earthlimb_is_sunlit``.  0 = sharp terminator.
+    daynight_mode : str
+        ``"limb"`` or ``"subsatellite"``.
     """
     if day_deg is None and night_deg is None:
         if twilight_margin_deg > 0:
@@ -209,11 +251,18 @@ def effective_earth_threshold(
         return default_deg
     day = day_deg if day_deg is not None else default_deg
     night = night_deg if night_deg is not None else default_deg
-    sunlit = earthlimb_is_sunlit(
-        target_unit, nadir_unit, sun_unit,
-        limb_angle_rad=limb_angle_rad,
-        twilight_margin_deg=twilight_margin_deg,
-    )
+
+    if daynight_mode == "subsatellite":
+        sunlit = subsatellite_is_sunlit(
+            nadir_unit, sun_unit,
+            twilight_margin_deg=twilight_margin_deg,
+        )
+    else:
+        sunlit = earthlimb_is_sunlit(
+            target_unit, nadir_unit, sun_unit,
+            limb_angle_rad=limb_angle_rad,
+            twilight_margin_deg=twilight_margin_deg,
+        )
     return np.where(sunlit, day, night)
 
 
@@ -626,6 +675,7 @@ def compute_visibility_with_constraints(
         config.earth_avoidance_deg,
         limb_angle_rad=limb_angle_rad,
         twilight_margin_deg=config.twilight_margin_deg,
+        daynight_mode=config.daynight_mode,
     )
     earth_ok = earth_center_sep_deg > earth_threshold
 

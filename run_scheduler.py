@@ -162,6 +162,13 @@ def parse_args() -> argparse.Namespace:
         help="Degrees past geometric terminator to classify as sunlit for day/night keepout (default: 0 = sharp terminator).",
     )
 
+    parser.add_argument(
+        "--daynight_mode",
+        type=str,
+        default="subsatellite",
+        help="Day/night mode for visibility calculations: 'limb' or 'subsatellite' (default: 'subsatellite')",
+    )
+
     # Star tracker keepout configuration
     parser.add_argument(
         "--st-sun-min",
@@ -295,6 +302,11 @@ def parse_args() -> argparse.Namespace:
         "--requested-occ-time-override",
         action="store_true",
         help="Allow occultation scheduling to continue when requested-hours has been met",
+    )
+    parser.add_argument(
+        "--allow-occ-st-violation",
+        action="store_true",
+        help="Allow occultation targets that violate only star-tracker keepout (prefer shortest loss)",
     )
 
     # Profiling configuration
@@ -742,6 +754,10 @@ def main() -> int:
             _get_val("twilight_margin_deg", args.twilight_margin, 0.0)
         )
 
+        daynight_mode = str(
+            _get_val("daynight_mode", args.daynight_mode, "subsatellite")
+        ).lower()
+
         # Star tracker keepouts
         st_sun_min = float(
             _get_val("st_sun_min_deg", args.st_sun_min, 0.0)
@@ -834,6 +850,14 @@ def main() -> int:
             ),
             False,
         )
+        allow_occ_startracker_violation = _as_bool(
+            _get_val(
+                "allow_occ_startracker_violation",
+                True if args.allow_occ_st_violation else None,
+                None,
+            ),
+            False,
+        )
 
         commissioning_days = int(_get_val("commissioning_days", None, 0))
 
@@ -877,6 +901,7 @@ def main() -> int:
             earth_avoidance_day_deg=earth_avoid_day,
             earth_avoidance_night_deg=earth_avoid_night,
             twilight_margin_deg=twilight_margin,
+            daynight_mode=daynight_mode,
             # Star tracker keepouts
             st_sun_min_deg=st_sun_min,
             st_moon_min_deg=st_moon_min,
@@ -906,6 +931,7 @@ def main() -> int:
             enable_occultation_xml=enable_occultation_xml,
             enable_occultation_pass1=enable_occultation_pass1,
             requested_occ_time_override=requested_occ_time_override,
+            allow_occ_startracker_violation=allow_occ_startracker_violation,
             use_legacy_mode=use_legacy_mode,
             parallel_workers=parallel_workers,
             # Sorting / metadata
