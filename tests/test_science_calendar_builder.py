@@ -19,6 +19,7 @@ from pandorascheduler_rework.science_calendar import (
     _normalise_target_name,
     _parse_datetime,
     _read_catalog,
+    _read_visibility_extended,
     _visibility_change_indices,
     generate_science_calendar,
 )
@@ -175,6 +176,13 @@ class TestHelperFunctions:
         name, star = _normalise_target_name("Vega")
         assert name == "Vega"
         assert star == "Vega"
+
+    def test_normalise_target_name_star_exceptions(self):
+        """Star names whose trailing letter looks like a planet suffix."""
+        for star in ("AU_Mic", "EV_Lac", "AF_Psc", "55_Cnc", "AO_Cassiopeiae"):
+            name, sname = _normalise_target_name(star)
+            assert name == star, f"{star}: target_name mangled"
+            assert sname == star, f"{star}: star_name mangled to {sname!r}"
 
     def test_parse_datetime_iso(self):
         dt = _parse_datetime("2026-03-01T12:30:00Z")
@@ -425,3 +433,151 @@ class TestMergedSegments:
         # After merging, no segment should be shorter than threshold
         durations = [(e - s).total_seconds() / 60 for s, e, v in merged]
         assert all(d >= 10 for d in durations)
+
+
+# ---------------------------------------------------------------------------
+# _occ_visibility_score
+# ---------------------------------------------------------------------------
+
+
+def _write_visibility(
+    data_dir: Path, star_name: str, df: pd.DataFrame,
+) -> None:
+    """Write a visibility parquet for *star_name* under ``aux_targets/``."""
+    out_dir = data_dir / "aux_targets" / star_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out_dir / f"Visibility for {star_name}.parquet", index=False)
+
+
+class TestOccVisibilityScore:
+    """Tests for _occ_visibility_score and allow_occ_startracker_violation."""
+
+    def _make_builder(self, tmp_path, *, allow_st=False):
+        _seed_catalogs(tmp_path)
+        csv = tmp_path / "sched.csv"
+        pd.DataFrame(
+            [
+                {
+                    "Target": "Star b",
+                    "Observation Start": "2026-03-01T00:00:00Z",
+                    "Observation Stop": "2026-03-02T00:00:00Z",
+                }
+            ]
+        ).to_csv(csv, index=False)
+        inputs = ScienceCalendarInputs(schedule_csv=csv, data_dir=tmp_path)
+        config = PandoraSchedulerConfig(
+            window_start=datetime(2026, 3, 1),
+            window_end=datetime(2026, 4, 1),
+            sun_avoidance_deg=91.0,
+            moon_avoidance_deg=25.0,
+            earth_avoidance_deg=110.0,
+            allow_occ_startracker_violation=allow_st,
+        )
+        return _ScienceCalendarBuilder(inputs, config)
+
+    def _make_vis_df(self, n_minutes, *, visible, sun_sep, moon_sep, earth_sep):
+        """Create a visibility DataFrame for *n_minutes* starting 2026-03-01."""
+        t0 = datetime(2026, 3, 1, 12, 0)
+        from astropy.time import Time as AstropyTime
+        times_utc = [t0 + timedelta(minutes=i) for i in range(n_minutes)]
+        mjds = [AstropyTime(t).mjd for t in times_utc]
+        return pd.DataFrame({
+            "Time(MJD_UTC)": mjds,
+            "Time_UTC": pd.to_datetime(times_utc),
+            "Visible": [float(visible)] * n_minutes,
+            "Sun_Sep": [float(sun_sep)] * n_minutes,
+            "Moon_Sep": [float(moon_sep)] * n_minutes,
+            "Earth_Sep": [float(earth_sep)] * n_minutes,
+        })
+
+    def test_fully_visible_returns_zero_frac(self, tmp_path):
+        builder = self._make_builder(tmp_path)
+        df = self._make_vis_df(10, visible=1, sun_sep=120, moon_sep=50, earth_sep=130)
+        _write_visibility(tmp_path, "OccStar", df)
+        ok, frac = builder._occ_visibility_score(
+            "OccStar", datetime(2026, 3, 1, 12, 0), datetime(2026, 3, 1, 12, 10),
+        )
+        assert ok is True
+        assert frac == 0.0
+
+    def test_boresight_fail_rejected_even_with_st_relaxed(self, tmp_path):
+        """Sun constraint violated → reject even with allow_occ_startracker_violation."""
+        builder = self._make_builder(tmp_path, allow_st=True)
+        # Sun_Sep < 91 → boresight fail
+        df = self._make_vis_df(10, visible=0, sun_sep=50, moon_sep=50, earth_sep=130)
+        _write_visibility(tmp_path, "OccStar", df)
+        ok, frac = builder._occ_visibility_score(
+            "OccStar", datetime(2026, 3, 1, 12, 0), datetime(2026, 3, 1, 12, 10),
+        )
+        assert ok is False
+        assert frac == 1.0
+
+    def test_st_only_fail_rejected_when_flag_off(self, tmp_path):
+        """ST-only failure rejected when allow_occ_startracker_violation=False."""
+        builder = self._make_builder(tmp_path, allow_st=False)
+        # Boresight passes, but Visible=0 → star tracker killed it
+        df = self._make_vis_df(10, visible=0, sun_sep=120, moon_sep=50, earth_sep=130)
+        _write_visibility(tmp_path, "OccStar", df)
+        ok, frac = builder._occ_visibility_score(
+            "OccStar", datetime(2026, 3, 1, 12, 0), datetime(2026, 3, 1, 12, 10),
+        )
+        assert ok is False
+
+    def test_st_only_fail_accepted_when_flag_on(self, tmp_path):
+        """ST-only failure accepted when allow_occ_startracker_violation=True."""
+        builder = self._make_builder(tmp_path, allow_st=True)
+        # Boresight passes, but Visible=0 → star tracker only
+        df = self._make_vis_df(10, visible=0, sun_sep=120, moon_sep=50, earth_sep=130)
+        _write_visibility(tmp_path, "OccStar", df)
+        ok, frac = builder._occ_visibility_score(
+            "OccStar", datetime(2026, 3, 1, 12, 0), datetime(2026, 3, 1, 12, 10),
+        )
+        assert ok is True
+        assert frac == 1.0  # 100% of segment is Visible=0
+
+    def test_partial_visibility_st_violation_scored(self, tmp_path):
+        """Some minutes not visible → falls through to extended check,
+        computes real ST violation fraction (not the fast path)."""
+        builder = self._make_builder(tmp_path, allow_st=True)
+        t0 = datetime(2026, 3, 1, 12, 0)
+        from astropy.time import Time as AstropyTime
+        n = 10
+        times_utc = [t0 + timedelta(minutes=i) for i in range(n)]
+        mjds = [AstropyTime(t).mjd for t in times_utc]
+        # First 6 visible, last 4 not (but boresight OK everywhere)
+        df = pd.DataFrame({
+            "Time(MJD_UTC)": mjds,
+            "Time_UTC": pd.to_datetime(times_utc),
+            "Visible": [1.0] * 6 + [0.0] * 4,
+            "Sun_Sep": [120.0] * n,
+            "Moon_Sep": [50.0] * n,
+            "Earth_Sep": [130.0] * n,
+        })
+        _write_visibility(tmp_path, "OccStar", df)
+        ok, frac = builder._occ_visibility_score(
+            "OccStar", datetime(2026, 3, 1, 12, 0), datetime(2026, 3, 1, 12, 10),
+        )
+        assert ok is True
+        assert frac == pytest.approx(0.4)  # 4/10 minutes not visible (ST-only)
+
+    def test_missing_separation_columns_rejected(self, tmp_path):
+        """If parquet lacks separation columns, treat as normal reject."""
+        builder = self._make_builder(tmp_path, allow_st=True)
+        # Write parquet with only the basic columns (no Sun_Sep etc.)
+        t0 = datetime(2026, 3, 1, 12, 0)
+        from astropy.time import Time as AstropyTime
+        n = 10
+        times_utc = [t0 + timedelta(minutes=i) for i in range(n)]
+        mjds = [AstropyTime(t).mjd for t in times_utc]
+        df = pd.DataFrame({
+            "Time(MJD_UTC)": mjds,
+            "Time_UTC": pd.to_datetime(times_utc),
+            "Visible": [0.0] * n,
+        })
+        out_dir = tmp_path / "aux_targets" / "OccStar"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(out_dir / "Visibility for OccStar.parquet", index=False)
+        ok, frac = builder._occ_visibility_score(
+            "OccStar", datetime(2026, 3, 1, 12, 0), datetime(2026, 3, 1, 12, 10),
+        )
+        assert ok is False

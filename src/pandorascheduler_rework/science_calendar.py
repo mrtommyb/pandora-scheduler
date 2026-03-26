@@ -585,9 +585,6 @@ class _ScienceCalendarBuilder:
                 "Unable to schedule occultation target for %s between %s and %s",
                 target_name, start, final_time,
             )
-            fallback_occultation = self._select_fallback_occultation_target(
-                ra_value, dec_value,
-            )
 
         # --- Path 2: catalog-fallback occultation (no occ_df) ---------------
         if occ_df is None:
@@ -600,12 +597,20 @@ class _ScienceCalendarBuilder:
                         seg_start, seg_stop, ra_value, dec_value,
                         target_info, priority_flag, transit_start, transit_stop,
                     )
-                elif fallback_occultation is not None:
-                    occ_target, ra_occ, dec_occ, occ_info = fallback_occultation
-                    seq_counter = self._emit_occultation_sequences(
-                        visit_element, seq_counter, occ_target,
-                        seg_start, seg_stop, ra_occ, dec_occ, occ_info,
+                else:
+                    # Select per-segment so the visibility check uses the
+                    # actual dark-gap times — a target visible in one gap
+                    # may violate sun keepout in another.
+                    fallback_occultation = self._select_fallback_occultation_target(
+                        ra_value, dec_value,
+                        seg_start=seg_start, seg_stop=seg_stop,
                     )
+                    if fallback_occultation is not None:
+                        occ_target, ra_occ, dec_occ, occ_info = fallback_occultation
+                        seq_counter = self._emit_occultation_sequences(
+                            visit_element, seq_counter, occ_target,
+                            seg_start, seg_stop, ra_occ, dec_occ, occ_info,
+                        )
             return
 
         # --- Path 3: scheduled occ_df available -----------------------------
@@ -614,10 +619,10 @@ class _ScienceCalendarBuilder:
             occ_time_index = occ_df.copy()
             try:
                 occ_time_index["_start_dt"] = pd.to_datetime(
-                    occ_time_index["start"], utc=True, errors="coerce"
+                    occ_time_index["start"], utc=True, format="ISO8601", errors="coerce"
                 ).dt.tz_localize(None)
                 occ_time_index["_stop_dt"] = pd.to_datetime(
-                    occ_time_index["stop"], utc=True, errors="coerce"
+                    occ_time_index["stop"], utc=True, format="ISO8601", errors="coerce"
                 ).dt.tz_localize(None)
                 occ_time_index = occ_time_index.dropna(
                     subset=["_start_dt", "_stop_dt", "Target"]
@@ -643,22 +648,8 @@ class _ScienceCalendarBuilder:
                 next_value = self._occ_chunk_end(current, seg_stop)
 
                 if oc_index >= len(occ_df):
-                    # Pre-built schedule exhausted — fall back to catalog.
-                    fallback = self._select_fallback_occultation_target(
-                        ra_value, dec_value,
-                    )
-                    if fallback is None:
-                        LOGGER.warning(
-                            "Ran out of occultation targets for %s "
-                            "between %s and %s",
-                            target_name, current, next_value,
-                        )
-                        break
-                    fb_target, fb_ra, fb_dec, fb_info = fallback
-                    seq_counter = self._emit_occultation_sequences(
-                        visit_element, seq_counter, fb_target,
-                        current, seg_stop, fb_ra, fb_dec, fb_info,
-                    )
+                    # Pre-built schedule exhausted — fall back to catalog
+                    # after the loop via the post-loop fallback block.
                     break
 
                 # Prefer time-based lookup; fall back to positional index.
@@ -701,6 +692,22 @@ class _ScienceCalendarBuilder:
                     oc_index += 1
                     continue
 
+                # Visibility gate: reject targets that violate keepout
+                # constraints (e.g. sun keepout) at the scheduled time.
+                # When allow_occ_startracker_violation is enabled, targets
+                # with ST-only violations are still accepted.
+                acceptable, _st_frac = self._occ_visibility_score(
+                    occ_target, current, next_value,
+                )
+                if not acceptable:
+                    LOGGER.debug(
+                        "Skipping occultation target %s (%s–%s): "
+                        "not visible (keepout constraint violated)",
+                        occ_target, current, next_value,
+                    )
+                    oc_index += 1
+                    continue
+
                 occ_info = _lookup_occultation_info(
                     occ_target,
                     self.target_catalog,
@@ -736,6 +743,28 @@ class _ScienceCalendarBuilder:
                 if used_fallback_row:
                     oc_index += 1
                 current = next_value
+
+            # After exhausting occ_df rows, try catalog fallback for any
+            # remaining dark time in this segment.
+            if current < seg_stop:
+                fallback = self._select_fallback_occultation_target(
+                    ra_value, dec_value,
+                    seg_start=current, seg_stop=seg_stop,
+                )
+                if fallback is not None:
+                    fb_target, fb_ra, fb_dec, fb_info = fallback
+                    seq_counter = self._emit_occultation_sequences(
+                        visit_element, seq_counter, fb_target,
+                        current, seg_stop, fb_ra, fb_dec, fb_info,
+                    )
+                    current = seg_stop
+                else:
+                    gap_minutes = (seg_stop - current).total_seconds() / 60
+                    LOGGER.warning(
+                        "No visible occultation target for %s during "
+                        "dark gap %s–%s (%.0f min gap in XML)",
+                        target_name, current, seg_stop, gap_minutes,
+                    )
 
     def _emit_full_visibility(
         self,
@@ -776,10 +805,133 @@ class _ScienceCalendarBuilder:
             )
             seq_counter += 1
 
+    def _is_target_visible_in_segment(
+        self,
+        star_name: str,
+        seg_start: datetime,
+        seg_stop: datetime,
+    ) -> bool:
+        """Return True if *star_name* has any visible minutes in [seg_start, seg_stop).
+
+        Reads the target's ``aux_targets`` visibility parquet and checks the
+        pre-computed ``Visible`` flag.  Returns False when the target is not
+        visible or when visibility data cannot be loaded.
+        """
+        vis_df = _read_visibility(
+            self.data_dir / "aux_targets" / star_name, star_name,
+        )
+        if vis_df is None or vis_df.empty:
+            return False
+
+        if "Time_UTC" in vis_df.columns and pd.api.types.is_datetime64_any_dtype(
+            vis_df["Time_UTC"]
+        ):
+            times = vis_df["Time_UTC"].to_numpy(dtype="datetime64[ns]")
+            mask = (
+                (times >= np.datetime64(seg_start))
+                & (times < np.datetime64(seg_stop))
+            )
+        elif "Time(MJD_UTC)" in vis_df.columns:
+            start_mjd = Time(seg_start).mjd
+            stop_mjd = Time(seg_stop).mjd
+            mjd = vis_df["Time(MJD_UTC)"].to_numpy(dtype=float)
+            mask = (mjd >= start_mjd) & (mjd < stop_mjd)
+        else:
+            return False
+
+        segment_vis = vis_df.loc[mask, "Visible"]
+        if segment_vis.empty:
+            return False
+        return bool((segment_vis > 0).any())
+
+    def _occ_visibility_score(
+        self,
+        star_name: str,
+        seg_start: datetime,
+        seg_stop: datetime,
+    ) -> tuple[bool, float]:
+        """Score an occultation candidate's visibility in *[seg_start, seg_stop)*.
+
+        Returns ``(acceptable, st_violation_frac)`` where:
+
+        * *acceptable* — True if the target may be scheduled.  Always True when
+          fully visible.  When ``allow_occ_startracker_violation`` is enabled,
+          also True if the **only** keepout failure is star-tracker (boresight
+          Sun/Moon/Earth constraints all pass).
+        * *st_violation_frac* — fraction of segment minutes where the target
+          is not visible (0.0 when fully visible, >0 for ST-only violations).
+          Used to rank candidates: lower is better.
+        """
+        # Fast path: fully visible → always acceptable.
+        if self._is_target_visible_in_segment(star_name, seg_start, seg_stop):
+            return True, 0.0
+
+        if not self.config.allow_occ_startracker_violation:
+            return False, 1.0
+
+        # Extended check: read boresight separation columns to determine
+        # whether non-visibility is solely due to star-tracker keepout.
+        vis_df = _read_visibility_extended(
+            self.data_dir / "aux_targets" / star_name, star_name,
+        )
+        if vis_df is None or vis_df.empty:
+            return False, 1.0
+
+        # Build time mask for the segment.
+        if "Time_UTC" in vis_df.columns and pd.api.types.is_datetime64_any_dtype(
+            vis_df["Time_UTC"]
+        ):
+            times = vis_df["Time_UTC"].to_numpy(dtype="datetime64[ns]")
+            mask = (
+                (times >= np.datetime64(seg_start))
+                & (times < np.datetime64(seg_stop))
+            )
+        elif "Time(MJD_UTC)" in vis_df.columns:
+            start_mjd = Time(seg_start).mjd
+            stop_mjd = Time(seg_stop).mjd
+            mjd = vis_df["Time(MJD_UTC)"].to_numpy(dtype=float)
+            mask = (mjd >= start_mjd) & (mjd < stop_mjd)
+        else:
+            return False, 1.0
+
+        seg = vis_df.loc[mask]
+        if seg.empty:
+            return False, 1.0
+
+        # Verify that the required separation columns exist.
+        needed = {"Sun_Sep", "Moon_Sep", "Earth_Sep"}
+        if not needed.issubset(seg.columns):
+            return False, 1.0
+
+        # Check boresight constraints on every minute in the segment.
+        boresight_ok = (
+            (seg["Sun_Sep"] >= self.config.sun_avoidance_deg)
+            & (seg["Moon_Sep"] >= self.config.moon_avoidance_deg)
+            & (seg["Earth_Sep"] >= self.config.earth_avoidance_deg)
+        )
+
+        if not boresight_ok.all():
+            # At least one minute fails a boresight constraint — reject.
+            return False, 1.0
+
+        # Boresight passes everywhere → failure is star-tracker only.
+        n_total = len(seg)
+        n_not_visible = int((seg["Visible"] <= 0).sum())
+        st_frac = n_not_visible / n_total if n_total else 1.0
+
+        LOGGER.debug(
+            "Occultation candidate %s: ST-only violation %.0f%% of segment "
+            "(%s–%s)",
+            star_name, st_frac * 100, seg_start, seg_stop,
+        )
+        return True, st_frac
+
     def _select_fallback_occultation_target(
         self,
         reference_ra: float,
         reference_dec: float,
+        seg_start: Optional[datetime] = None,
+        seg_stop: Optional[datetime] = None,
     ) -> Optional[tuple[str, float, float, Optional[pd.DataFrame]]]:
         if self.occ_catalog is None or self.occ_catalog.empty:
             return None
@@ -787,7 +939,8 @@ class _ScienceCalendarBuilder:
             return None
 
         candidates = self.occ_catalog.copy()
-        available_rows = []
+        # Each accepted row carries its ST-violation fraction for ranking.
+        scored_rows: list[tuple[pd.Series, float]] = []
         for _, row in candidates.iterrows():
             name = str(row.get("Star Name", "")).strip()
             if not name:
@@ -795,18 +948,43 @@ class _ScienceCalendarBuilder:
             current_occ_time = self.occultation_obs_time.get(name, timedelta())
             if current_occ_time >= self._get_occultation_time_limit(name):
                 continue
-            available_rows.append(row)
+            # When segment times are provided, filter by visibility score
+            # (respects allow_occ_startracker_violation).
+            if seg_start is not None and seg_stop is not None:
+                acceptable, st_frac = self._occ_visibility_score(
+                    name, seg_start, seg_stop,
+                )
+                if not acceptable:
+                    LOGGER.debug(
+                        "Skipping occultation candidate %s: not visible "
+                        "between %s and %s",
+                        name, seg_start, seg_stop,
+                    )
+                    continue
+                scored_rows.append((row, st_frac))
+            else:
+                scored_rows.append((row, 0.0))
 
-        if not available_rows:
+        if not scored_rows:
             return None
 
+        # Sort: prefer fully-visible (st_frac == 0) first, then least ST
+        # violation.  Within the same tier, preserve catalog/slew order.
+        scored_rows.sort(key=lambda r: r[1])
+
+        available_rows = [r[0] for r in scored_rows]
         candidates = pd.DataFrame(available_rows)
         if self.config.prioritise_occultations_by_slew:
-            candidates = _prioritise_occultation_targets(
-                candidates,
-                reference_ra,
-                reference_dec,
+            # Slew-priority sorting only among the best ST-violation tier.
+            # Extract the best (lowest) fraction and filter to that tier,
+            # then slew-sort within it.
+            best_frac = scored_rows[0][1]
+            tier_rows = [r for r, f in scored_rows if f <= best_frac + 1e-9]
+            tier_df = pd.DataFrame(tier_rows)
+            tier_df = _prioritise_occultation_targets(
+                tier_df, reference_ra, reference_dec,
             )
+            candidates = tier_df
 
         chosen = candidates.iloc[0]
         occ_target = str(chosen.get("Star Name", "")).strip()
@@ -939,7 +1117,13 @@ def _normalise_target_name(target: str) -> tuple[str, str]:
     if target.endswith("STD"):
         stripped = target[:-4]
         return stripped, stripped
-    if target.endswith(tuple("bcdef")) and target not in ("EV_Lac", "AF_Psc"):
+    # Star names whose trailing letter coincidentally matches a planet-suffix
+    # character (b/c/d/e/f).  Add entries here when a new catalogue target
+    # ends with one of those letters but is NOT a planet designation.
+    _STAR_NAME_EXCEPTIONS = frozenset(
+        {"EV_Lac", "AF_Psc", "AU_Mic", "55_Cnc", "AO_Cassiopeiae"}
+    )
+    if target.endswith(tuple("bcdef")) and target not in _STAR_NAME_EXCEPTIONS:
         return target, target[:-1].strip()
     return target, target
 
@@ -1028,6 +1212,29 @@ def _lookup_occultation_info(
         return occ_match.head(1)
 
     return None
+
+
+def _read_visibility_extended(
+    directory: Path, name: str,
+) -> Optional[pd.DataFrame]:
+    """Read visibility parquet with boresight separation columns.
+
+    Returns a DataFrame with Time, Visible, Sun_Sep, Moon_Sep, Earth_Sep
+    (when available).  Falls back gracefully when separation columns are
+    absent (older parquet files).
+    """
+    path = directory / f"Visibility for {name}.parquet"
+    cols = [
+        "Time(MJD_UTC)", "Time_UTC", "Visible",
+        "Sun_Sep", "Moon_Sep", "Earth_Sep",
+    ]
+    df = read_parquet_cached(str(path), columns=cols)
+    if df is None:
+        # Fall back to minimal columns (older parquet).
+        df = read_parquet_cached(
+            str(path), columns=["Time(MJD_UTC)", "Visible"],
+        )
+    return df
 
 
 def _read_visibility(directory: Path, name: str) -> Optional[pd.DataFrame]:

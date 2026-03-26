@@ -160,6 +160,18 @@ class PandoraSchedulerConfig:
     ``earth_avoidance_day_deg`` or ``earth_avoidance_night_deg`` is set.
     """
 
+    daynight_mode: str = "subsatellite"
+    """Algorithm for determining day vs night for Earth-avoidance switching.
+
+    * ``"subsatellite"`` (default): day/night is based on whether the subsatellite
+      point (ground directly below the spacecraft) is sunlit.
+    * ``"limb"`` : day/night is based on whether the nearest
+      Earth limb point *in the target direction* is sunlit.
+
+    Only has an effect when ``earth_avoidance_day_deg`` or
+    ``earth_avoidance_night_deg`` is set.
+    """
+
     # ============================================================================
     # STAR TRACKER KEEPOUT ANGLES (degrees)
     # ============================================================================
@@ -250,6 +262,16 @@ class PandoraSchedulerConfig:
 
     requested_occ_time_override: bool = False
     """When true, allow scheduling occultation targets beyond requested-hour limits."""
+
+    allow_occ_startracker_violation: bool = False
+    """Allow occultation targets that violate only star-tracker keepout.
+
+    When True, occultation targets whose *boresight* constraints (Sun, Moon,
+    Earth) all pass but whose star-tracker keepout fails are still accepted.
+    Among such targets, candidates with shorter star-tracker violation are
+    preferred.  Targets that violate any boresight constraint are still
+    rejected.
+    """
 
     # ============================================================================
     # PARALLELISM
@@ -360,6 +382,13 @@ class PandoraSchedulerConfig:
             raise ValueError(
                 "min_power_frac must be in [0, 1], got %s"
                 % (self.min_power_frac,)
+            )
+
+        # Validate daynight_mode
+        if self.daynight_mode not in ("limb", "subsatellite"):
+            raise ValueError(
+                "daynight_mode must be 'limb' or 'subsatellite', got %r"
+                % (self.daynight_mode,)
             )
 
         # Validate parallel worker count

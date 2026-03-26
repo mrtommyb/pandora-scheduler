@@ -167,8 +167,8 @@ def test_generate_science_calendar_splits_long_occultations(tmp_path, monkeypatc
         start + timedelta(minutes=40),
     )
 
-    occ_a_flags = [0] * 30 + [1] * 32 + [0] * (total_minutes - 62)
-    occ_b_flags = [0] * 60 + [1] * 31 + [0] * (total_minutes - 91)
+    occ_a_flags = [0] * 30 + [1] * 60 + [0] * (total_minutes - 90)
+    occ_b_flags = [0] * 30 + [1] * 60 + [0] * (total_minutes - 90)
     _write_visibility(data_dir / "aux_targets" / "OccA", "OccA", times, occ_a_flags)
     _write_visibility(data_dir / "aux_targets" / "OccB", "OccB", times, occ_b_flags)
 
@@ -188,11 +188,8 @@ def test_generate_science_calendar_splits_long_occultations(tmp_path, monkeypatc
     planet_dir.mkdir(parents=True, exist_ok=True)
     # use the minute-resolution planet transit visibility written above
 
-    # Create visibility for OccA and OccB
-    for star in ["OccA", "OccB"]:
-        vis_dir = data_dir / "aux_targets" / star
-        vis_dir.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame({"Time(MJD_UTC)": [61041.0, 61043.0], "Visible": [1, 1]}).to_parquet(vis_dir / f"Visibility for {star}.parquet", index=False)
+    # OccA and OccB aux_targets visibility already written by
+    # _write_visibility above with correct minute-resolution data.
 
     pd.DataFrame(
         [
