@@ -300,9 +300,10 @@ class TestEffectiveEarthThreshold:
         """Explicit day/night values → per-timestep array."""
         nadir = _tile([0, 0, -1], 2)
         target = _tile([1, 0, 0], 2)
+        # zenith = [0,0,1]; sun must have +Z component to be sunlit
         sun = np.array([
-            _unit([1, 0, 0]),    # sunlit → day
-            _unit([-1, 0, 0]),   # dark   → night
+            _unit([1, 0, 1]),    # dot(zenith, sun) > 0 → sunlit → day
+            _unit([-1, 0, -1]),  # dot(zenith, sun) < 0 → dark   → night
         ])
         result = effective_earth_threshold(target, nadir, sun, 110.0, 80.0, 86.0)
         assert np.isclose(result[0], 110.0)
@@ -773,6 +774,21 @@ class TestEffectiveEarthThresholdDaynightMode:
         )
         assert r_limb == 95.0
         assert r_subsat == 95.0
+
+    def test_invalid_daynight_mode_raises(self):
+        """Invalid daynight_mode raises ValueError when day/night branching is active."""
+        N = 2
+        nadir = _tile(_unit([0, 0, -1]), N)
+        target = _tile(_unit([1, 0, 0]), N)
+        sun = _tile(_unit([0, 0, 1]), N)
+        limb = np.full(N, np.arccos(6371.0 / 6971.0))
+
+        with pytest.raises(ValueError, match="daynight_mode"):
+            effective_earth_threshold(
+                target, nadir, sun,
+                day_deg=110.0, night_deg=80.0, default_deg=95.0,
+                limb_angle_rad=limb, daynight_mode="bogus",
+            )
 
 
 # ============================================================================

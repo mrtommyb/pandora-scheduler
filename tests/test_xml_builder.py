@@ -167,8 +167,8 @@ def test_generate_science_calendar_splits_long_occultations(tmp_path, monkeypatc
         start + timedelta(minutes=40),
     )
 
-    occ_a_flags = [0] * 30 + [1] * 32 + [0] * (total_minutes - 62)
-    occ_b_flags = [0] * 60 + [1] * 31 + [0] * (total_minutes - 91)
+    occ_a_flags = [0] * 30 + [1] * 60 + [0] * (total_minutes - 90)
+    occ_b_flags = [0] * 30 + [1] * 60 + [0] * (total_minutes - 90)
     _write_visibility(data_dir / "aux_targets" / "OccA", "OccA", times, occ_a_flags)
     _write_visibility(data_dir / "aux_targets" / "OccB", "OccB", times, occ_b_flags)
 

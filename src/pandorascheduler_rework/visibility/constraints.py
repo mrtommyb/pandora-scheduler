@@ -257,11 +257,15 @@ def effective_earth_threshold(
             nadir_unit, sun_unit,
             twilight_margin_deg=twilight_margin_deg,
         )
-    else:
+    elif daynight_mode == "limb":
         sunlit = earthlimb_is_sunlit(
             target_unit, nadir_unit, sun_unit,
             limb_angle_rad=limb_angle_rad,
             twilight_margin_deg=twilight_margin_deg,
+        )
+    else:
+        raise ValueError(
+            f"daynight_mode must be 'subsatellite' or 'limb', got {daynight_mode!r}"
         )
     return np.where(sunlit, day, night)
 

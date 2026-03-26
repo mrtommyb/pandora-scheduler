@@ -163,9 +163,10 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--daynight_mode",
+        "--daynight-mode",
         type=str,
         default="subsatellite",
+        dest="daynight_mode",
         help="Day/night mode for visibility calculations: 'limb' or 'subsatellite' (default: 'subsatellite')",
     )
 

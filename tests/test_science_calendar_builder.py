@@ -535,8 +535,9 @@ class TestOccVisibilityScore:
         assert ok is True
         assert frac == 1.0  # 100% of segment is Visible=0
 
-    def test_partial_visibility_fully_acceptable(self, tmp_path):
-        """Some minutes visible → fully acceptable via fast path (frac=0)."""
+    def test_partial_visibility_st_violation_scored(self, tmp_path):
+        """Some minutes not visible → falls through to extended check,
+        computes real ST violation fraction (not the fast path)."""
         builder = self._make_builder(tmp_path, allow_st=True)
         t0 = datetime(2026, 3, 1, 12, 0)
         from astropy.time import Time as AstropyTime
@@ -557,7 +558,7 @@ class TestOccVisibilityScore:
             "OccStar", datetime(2026, 3, 1, 12, 0), datetime(2026, 3, 1, 12, 10),
         )
         assert ok is True
-        assert frac == 0.0  # fast-path: at least some visible → fully OK
+        assert frac == pytest.approx(0.4)  # 4/10 minutes not visible (ST-only)
 
     def test_missing_separation_columns_rejected(self, tmp_path):
         """If parquet lacks separation columns, treat as normal reject."""
