@@ -30,6 +30,7 @@ from pandorascheduler_rework.visibility.constraints import (
     star_tracker_eci,
     sun_constrained_attitude,
     compute_visibility_with_constraints,
+    subsatellite_is_sunlit,
 )
 
 
@@ -215,6 +216,71 @@ class TestEarthlimbIsSunlit:
         # n·sun = cos(θ)·(-1) + sin(θ)·0 = -cos(θ) < 0 → NOT sunlit
         assert not result[0]
 
+    # ---- twilight_margin_deg tests ----
+
+    def test_twilight_margin_default_zero(self):
+        """Default margin produces same result as explicit margin=0."""
+        nadir = _tile([0, 0, -1], 1)
+        target = _tile([1, 0, 0], 1)
+        sun = _tile([1, 0, 0], 1)
+        default = earthlimb_is_sunlit(target, nadir, sun)
+        explicit = earthlimb_is_sunlit(target, nadir, sun, twilight_margin_deg=0.0)
+        np.testing.assert_array_equal(default, explicit)
+
+    def test_twilight_margin_broadens_sunlit(self):
+        """A positive margin classifies marginal cases as sunlit.
+
+        Construct geometry where dot(n, sun) is slightly negative (just past
+        terminator).  With margin=0 → dark; with a large enough margin → sunlit.
+        """
+        nadir = _tile([0, 0, -1], 1)
+        target = _tile([1, 0, 0], 1)
+        # Sun barely below the horizon of the limb normal:
+        # dot(limb_dir, sun) = cos(91°) ≈ -0.0175
+        sun = _tile(_unit([np.cos(np.deg2rad(91)), np.sin(np.deg2rad(91)), 0]), 1)
+
+        # Without limb_angle_rad (legacy path), limb_dir·sun ≈ -0.017
+        assert not earthlimb_is_sunlit(target, nadir, sun, twilight_margin_deg=0.0)[0]
+        # Margin of 5° → threshold = -sin(5°) ≈ -0.087, so -0.017 > -0.087 → sunlit
+        assert earthlimb_is_sunlit(target, nadir, sun, twilight_margin_deg=5.0)[0]
+
+    def test_twilight_margin_with_limb_angle(self):
+        """Margin works with the full surface-normal path (limb_angle_rad given)."""
+        nadir = _tile([0, 0, -1], 1)
+        target = _tile([1, 0, 0], 1)
+        R_EARTH = 6371.0
+        la_rad = np.array([np.arccos(R_EARTH / (R_EARTH + 600.0))])
+
+        # Surface normal: n = [sin(la), 0, cos(la)]  (in x-z plane)
+        # Choose sun so that n·sun = cos(angle_between) = -0.02
+        # i.e. angle_between = arccos(-0.02) ≈ 91.1° from n
+        # Parameterise sun = [sin(β), 0, cos(β)] in x-z plane:
+        #   n·sun = cos(β - la) = -0.02  →  β = la + arccos(-0.02)
+        beta = la_rad[0] + np.arccos(-0.02)
+        sun = _tile([np.sin(beta), 0.0, np.cos(beta)], 1)
+
+        dot_n_sun = (
+            np.sin(la_rad[0]) * sun[0, 0] + np.cos(la_rad[0]) * sun[0, 2]
+        )
+        assert dot_n_sun < 0, "Sanity: n·sun should be slightly negative"
+
+        assert not earthlimb_is_sunlit(target, nadir, sun, la_rad, twilight_margin_deg=0.0)[0]
+        # Margin=10° → threshold = -sin(10°) ≈ -0.174, -0.02 > -0.174 → sunlit
+        assert earthlimb_is_sunlit(target, nadir, sun, la_rad, twilight_margin_deg=10.0)[0]
+
+    def test_twilight_margin_monotonic(self):
+        """Increasing margin never reduces the number of sunlit timesteps."""
+        nadir = _tile([0, 0, -1], 10)
+        target = _tile([1, 0, 0], 10)
+        # Sun sweeps from fully sunlit to fully dark
+        angles = np.linspace(0, np.pi, 10)
+        sun = np.column_stack([np.cos(angles), np.sin(angles), np.zeros(10)])
+
+        count_0 = earthlimb_is_sunlit(target, nadir, sun, twilight_margin_deg=0.0).sum()
+        count_5 = earthlimb_is_sunlit(target, nadir, sun, twilight_margin_deg=5.0).sum()
+        count_18 = earthlimb_is_sunlit(target, nadir, sun, twilight_margin_deg=18.0).sum()
+        assert count_0 <= count_5 <= count_18
+
 
 # ============================================================================
 # effective_earth_threshold
@@ -234,13 +300,52 @@ class TestEffectiveEarthThreshold:
         """Explicit day/night values → per-timestep array."""
         nadir = _tile([0, 0, -1], 2)
         target = _tile([1, 0, 0], 2)
+        # zenith = [0,0,1]; sun must have +Z component to be sunlit
         sun = np.array([
-            _unit([1, 0, 0]),    # sunlit → day
-            _unit([-1, 0, 0]),   # dark   → night
+            _unit([1, 0, 1]),    # dot(zenith, sun) > 0 → sunlit → day
+            _unit([-1, 0, -1]),  # dot(zenith, sun) < 0 → dark   → night
         ])
         result = effective_earth_threshold(target, nadir, sun, 110.0, 80.0, 86.0)
         assert np.isclose(result[0], 110.0)
         assert np.isclose(result[1], 80.0)
+
+    def test_twilight_margin_shifts_classification(self):
+        """Margin moves a marginal timestep from night→day threshold.
+
+        Sun at 91° from limb_dir → dot ≈ -0.017 < 0.  With margin=0 it is
+        dark (→ night_deg); with margin=5° → threshold ≈ -0.087 so it becomes
+        sunlit (→ day_deg).
+        """
+        nadir = _tile([0, 0, -1], 1)
+        target = _tile([1, 0, 0], 1)
+        sun = _tile(_unit([np.cos(np.deg2rad(91)), np.sin(np.deg2rad(91)), 0]), 1)
+
+        res0 = effective_earth_threshold(
+            target, nadir, sun, 110.0, 80.0, 86.0, twilight_margin_deg=0.0,
+        )
+        assert np.isclose(res0[0], 80.0), "Margin 0: marginal point → night"
+
+        res5 = effective_earth_threshold(
+            target, nadir, sun, 110.0, 80.0, 86.0, twilight_margin_deg=5.0,
+        )
+        assert np.isclose(res5[0], 110.0), "Margin 5°: marginal point → day"
+
+
+# ============================================================================
+# Config default
+# ============================================================================
+
+
+class TestTwilightMarginConfig:
+    def test_default_zero(self):
+        """Config defaults to 0.0 twilight margin."""
+        cfg = _make_config()
+        assert cfg.twilight_margin_deg == 0.0
+
+    def test_custom_margin(self):
+        """Config accepts a positive twilight margin."""
+        cfg = _make_config(twilight_margin_deg=18.0)
+        assert cfg.twilight_margin_deg == 18.0
 
 
 # ============================================================================
@@ -517,3 +622,305 @@ class TestConfigValidation:
     def test_min_power_frac_range(self):
         with pytest.raises(ValueError, match="min_power_frac"):
             _make_config(min_power_frac=1.5)
+
+    def test_daynight_mode_invalid(self):
+        with pytest.raises(ValueError, match="daynight_mode"):
+            _make_config(daynight_mode="bogus")
+
+
+# ============================================================================
+# subsatellite_is_sunlit
+# ============================================================================
+
+
+class TestSubsatelliteIsSunlit:
+    def test_dayside(self):
+        """Spacecraft over dayside: zenith and sun on same hemisphere."""
+        nadir = _tile([0, 0, -1], 1)  # zenith = +Z
+        sun = _tile([0, 0, 1], 1)     # sun above → dayside
+        result = subsatellite_is_sunlit(nadir, sun)
+        assert result[0] is True or bool(result[0]) is True
+
+    def test_nightside(self):
+        """Spacecraft over nightside: zenith and sun on opposite hemispheres."""
+        nadir = _tile([0, 0, -1], 1)
+        sun = _tile([0, 0, -1], 1)    # sun below → nightside
+        result = subsatellite_is_sunlit(nadir, sun)
+        assert bool(result[0]) is False
+
+    def test_terminator_sharp(self):
+        """At exact terminator with margin=0 → nightside (not strictly dayside)."""
+        nadir = _tile([0, 0, -1], 1)
+        sun = _tile([1, 0, 0], 1)     # sun perpendicular → terminator
+        result = subsatellite_is_sunlit(nadir, sun, twilight_margin_deg=0.0)
+        assert bool(result[0]) is False
+
+    def test_terminator_with_margin(self):
+        """At terminator with margin → classified as dayside."""
+        nadir = _tile([0, 0, -1], 1)
+        sun = _tile([1, 0, 0], 1)
+        result = subsatellite_is_sunlit(nadir, sun, twilight_margin_deg=10.0)
+        assert bool(result[0]) is True
+
+    def test_array(self):
+        """Array input with mixed day/night timesteps."""
+        nadir = np.array([
+            [0, 0, -1],
+            [0, 0, -1],
+        ], dtype=float)
+        sun = np.array([
+            [0, 0, 1],     # day
+            [0, 0, -1],    # night
+        ], dtype=float)
+        result = subsatellite_is_sunlit(nadir, sun)
+        assert bool(result[0]) is True
+        assert bool(result[1]) is False
+
+
+# ============================================================================
+# effective_earth_threshold with daynight_mode
+# ============================================================================
+
+
+class TestEffectiveEarthThresholdDaynightMode:
+    def test_limb_mode_default(self):
+        """Default mode='limb' uses earthlimb_is_sunlit."""
+        N = 2
+        nadir = _tile(_unit([0, 0, -1]), N)
+        target = _tile(_unit([1, 0, 0]), N)
+        # Sun same direction as target → limb is sunlit → day threshold
+        sun = _tile(_unit([1, 0, 0]), N)
+        limb = np.full(N, np.arccos(6371.0 / 6971.0))
+
+        result = effective_earth_threshold(
+            target, nadir, sun,
+            day_deg=110.0, night_deg=80.0, default_deg=95.0,
+            limb_angle_rad=limb, daynight_mode="limb",
+        )
+        # With limb mode, sun aligned with target → sunlit → day=110
+        np.testing.assert_allclose(result, 110.0)
+
+    def test_subsatellite_mode(self):
+        """subsatellite mode uses zenith·sun instead of limb geometry."""
+        N = 2
+        nadir = _tile(_unit([0, 0, -1]), N)
+        target = _tile(_unit([1, 0, 0]), N)
+        limb = np.full(N, np.arccos(6371.0 / 6971.0))
+
+        # Sun overhead (+Z): subsatellite is dayside regardless of target dir
+        sun_day = _tile(_unit([0, 0, 1]), N)
+        result_day = effective_earth_threshold(
+            target, nadir, sun_day,
+            day_deg=110.0, night_deg=80.0, default_deg=95.0,
+            limb_angle_rad=limb, daynight_mode="subsatellite",
+        )
+        np.testing.assert_allclose(result_day, 110.0)
+
+        # Sun below (-Z): subsatellite is nightside
+        sun_night = _tile(_unit([0, 0, -1]), N)
+        result_night = effective_earth_threshold(
+            target, nadir, sun_night,
+            day_deg=110.0, night_deg=80.0, default_deg=95.0,
+            limb_angle_rad=limb, daynight_mode="subsatellite",
+        )
+        np.testing.assert_allclose(result_night, 80.0)
+
+    def test_modes_can_disagree(self):
+        """Show a geometry where limb and subsatellite give different answers.
+
+        Target in +X, zenith in +Z, sun in +X:
+        - limb mode: nearest limb to target is in +X; limb normal has +X
+          component → sunlit → day threshold
+        - subsatellite mode: dot(zenith, sun) = dot(+Z, +X) = 0
+          → terminator → NOT sunlit → night threshold
+        """
+        N = 1
+        nadir = _tile(_unit([0, 0, -1]), N)
+        target = _tile(_unit([1, 0, 0]), N)
+        sun = _tile(_unit([1, 0, 0]), N)
+        limb = np.full(N, np.arccos(6371.0 / 6971.0))
+
+        result_limb = effective_earth_threshold(
+            target, nadir, sun,
+            day_deg=110.0, night_deg=80.0, default_deg=95.0,
+            limb_angle_rad=limb, daynight_mode="limb",
+        )
+        result_subsat = effective_earth_threshold(
+            target, nadir, sun,
+            day_deg=110.0, night_deg=80.0, default_deg=95.0,
+            limb_angle_rad=limb, daynight_mode="subsatellite",
+        )
+        # limb: sunlit → 110; subsatellite: terminator → 80
+        np.testing.assert_allclose(result_limb, 110.0)
+        np.testing.assert_allclose(result_subsat, 80.0)
+
+    def test_no_effect_when_both_none(self):
+        """When day/night both None, mode doesn't matter."""
+        N = 2
+        nadir = _tile(_unit([0, 0, -1]), N)
+        target = _tile(_unit([1, 0, 0]), N)
+        sun = _tile(_unit([0, 0, 1]), N)
+        limb = np.full(N, np.arccos(6371.0 / 6971.0))
+
+        r_limb = effective_earth_threshold(
+            target, nadir, sun,
+            day_deg=None, night_deg=None, default_deg=95.0,
+            limb_angle_rad=limb, daynight_mode="limb",
+        )
+        r_subsat = effective_earth_threshold(
+            target, nadir, sun,
+            day_deg=None, night_deg=None, default_deg=95.0,
+            limb_angle_rad=limb, daynight_mode="subsatellite",
+        )
+        assert r_limb == 95.0
+        assert r_subsat == 95.0
+
+    def test_invalid_daynight_mode_raises(self):
+        """Invalid daynight_mode raises ValueError when day/night branching is active."""
+        N = 2
+        nadir = _tile(_unit([0, 0, -1]), N)
+        target = _tile(_unit([1, 0, 0]), N)
+        sun = _tile(_unit([0, 0, 1]), N)
+        limb = np.full(N, np.arccos(6371.0 / 6971.0))
+
+        with pytest.raises(ValueError, match="daynight_mode"):
+            effective_earth_threshold(
+                target, nadir, sun,
+                day_deg=110.0, night_deg=80.0, default_deg=95.0,
+                limb_angle_rad=limb, daynight_mode="bogus",
+            )
+
+
+# ============================================================================
+# compute_visibility_with_constraints + daynight_mode
+# ============================================================================
+
+
+class TestComputeVisibilitySubsatellite:
+    def test_subsatellite_mode_flips_visibility(self):
+        """A geometry that passes with subsatellite night but fails with limb day.
+
+        Target at 95° from Earth centre:
+        - day threshold 110 → FAIL  (95 < 110)
+        - night threshold 80 → PASS (95 > 80)
+
+        Sun in +Y (perpendicular to target), zenith in +Z:
+        - limb mode: nearest limb in target direction (+X component)
+          has surface normal with sin(la)*X + cos(la)*Z.  Sun in +Y
+          → dot(n, sun) = 0, threshold = 0 → NOT sunlit → night → PASS
+        We use sun in -Y for limb to be sunlit:
+        Actually, to make limb sunlit we need sun aligned with the
+        limb direction.
+
+        Simpler approach: put sun overhead (+Z), well separated from target.
+        - limb mode: zenith·sun = cos(la)>0, limb·sun has a component →
+          sunlit → day threshold 110 → FAIL (95<110)
+        - subsatellite: dot(zenith, sun) = 1 > 0 → dayside → day 110 →
+          FAIL too.
+
+        Better: use a geometry where the two modes disagree.
+        Sun in +X but slightly below horizon: zenith in +Z, sun in [1,0,-0.1].
+        - subsatellite: dot(+Z, normalize([1,0,-0.1])) ≈ -0.0995 < 0 → NIGHT
+        - limb: target in +X direction, limb point in +X, surface normal
+          has sin(la)*X component, dot(n, sun) has +X contribution → SUNLIT
+
+        We must also ensure sun separation from target is >= 91°.
+        Target at 95° from nadir [-Z]: target ≈ [sin95, 0, cos95] ≈ [0.996, 0, 0.087]
+        Sun: [1, 0, -0.1] normalised → would be too close to target.
+
+        Use different axes: target along +Y offset from -Z, sun in +X.
+        """
+        N = 1
+        # nadir = -Z, zenith = +Z
+        nadir = _tile(_unit([0, 0, -1]), N)
+        zenith = -nadir
+
+        # Target at 95° from nadir (Earth centre), in the Y-Z plane
+        theta = np.deg2rad(95)
+        target = _tile([0, np.sin(theta), -np.cos(theta)], N)
+        target = _normalise(target)
+        # target ≈ [0, 0.996, 0.087]
+
+        # Sun in +X: sep from target ≈ arccos(0) = 90°
+        # Need > 91°, so tilt sun a bit: [-0.1, 0, 0.995]... no.
+        # Actually put sun at [-1, 0, 0]:
+        # sep from target ≈ arccos(0) = 90°. Not enough.
+        # Use sun at [-0.1, -1, 0] normalised:
+        # dot(target, sun_unit) = 0 * (-0.0995) + 0.996 * (-0.995) + 0.087 * 0
+        #                       ≈ -0.99 → sep ≈ 171° > 91 ✓
+        sun = _tile(_unit([-0.1, -1, 0]), N)
+
+        # Moon far away
+        moon = _tile(_unit([0.5, 0.5, 0.5]), N)
+        # moon-target sep: dot = 0*0.577+0.996*0.577+0.087*0.577 ≈ 0.625 → 51° > 25 ✓
+
+        dist_km = np.full(N, 6971.0)
+        limb = np.arccos(6371.0 / dist_km)
+        earth_sep = fast_sep_deg(nadir, target)
+        # earth_sep = angle between nadir and target
+        # nadir = [0,0,-1], target ≈ [0, 0.996, 0.087]
+        # dot = 0 + 0 + (-1)*0.087... wait, target has -cos(95)
+        # cos(95°) = -0.087, so target ≈ [0, 0.996, 0.087]
+        # nadir·target = 0*0 + 0*0.996 + (-1)*0.087 = -0.087
+        # sep = arccos(-0.087) ≈ 95° ✓
+
+        # Now check limb-is-sunlit for limb mode:
+        # zenith = +Z, target ≈ [0, 0.996, 0.087]
+        # dot(target, zenith) = 0.087
+        # proj = target - zenith * 0.087 = [0, 0.996, 0]
+        # limb_dir = [0, 1, 0]
+        # sun_unit ≈ [-0.0995, -0.995, 0]
+        # n = cos(la)*zenith + sin(la)*limb_dir
+        #   = cos(la)*[0,0,1] + sin(la)*[0,1,0]
+        # n·sun = cos(la)*0 + sin(la)*(-0.995) < 0 → NOT sunlit → NIGHT
+
+        # For subsatellite mode:
+        # zenith = [0,0,1], sun ≈ [-0.0995, -0.995, 0]
+        # dot(zenith, sun) = 0 ≈ 0 → at terminator → NOT sunlit → NIGHT
+
+        # Both modes give NIGHT here. We need them to disagree.
+        # Let's use sun = [0.1, -1, 0.2] normalised:
+        sun = _tile(_unit([0.1, -1, 0.2]), N)
+        # zenith·sun_unit = 0*(...) + 0*(...) + 1*0.195 ≈ 0.195 > 0 → DAYSIDE
+        # (for subsatellite)
+        # limb n·sun: limb_dir = [0,1,0]
+        #   n = cos(la)*[0,0,1] + sin(la)*[0,1,0]
+        #   n·sun = cos(la)*0.195 + sin(la)*(-0.976) ≈ 0.91*0.195 + 0.41*(-0.976)
+        #         ≈ 0.177 - 0.400 = -0.223 < 0 → NOT sunlit → NIGHT
+
+        # So: subsatellite → DAYSIDE (110 threshold) → 95<110 → FAIL
+        #     limb → NIGHT (80 threshold) → 95>80 → PASS
+
+        # Check sun-target separation:
+        # target ≈ [0, 0.996, 0.087], sun_unit ≈ [0.098, -0.976, 0.195]
+        # dot = 0*0.098 + 0.996*(-0.976) + 0.087*0.195 ≈ -0.972 + 0.017 = -0.955
+        # sep ≈ 163° > 91 ✓
+
+        config_limb = _make_config(
+            earth_avoidance_deg=110.0,
+            earth_avoidance_day_deg=110.0,
+            earth_avoidance_night_deg=80.0,
+            daynight_mode="limb",
+            st_required=0,
+        )
+        config_subsat = _make_config(
+            earth_avoidance_deg=110.0,
+            earth_avoidance_day_deg=110.0,
+            earth_avoidance_night_deg=80.0,
+            daynight_mode="subsatellite",
+            st_required=0,
+        )
+
+        r_limb = compute_visibility_with_constraints(
+            target, nadir, sun, moon, dist_km, zenith, limb,
+            [slice(0, N)], earth_sep, config_limb,
+        )
+        r_subsat = compute_visibility_with_constraints(
+            target, nadir, sun, moon, dist_km, zenith, limb,
+            [slice(0, N)], earth_sep, config_subsat,
+        )
+
+        # limb mode: nearest limb NOT sunlit → night threshold 80 → PASS (95>80)
+        assert r_limb["visible"][0], "limb mode: nightside limb → threshold 80 → should pass"
+        # subsatellite mode: spacecraft on dayside → day threshold 110 → FAIL (95<110)
+        assert not r_subsat["visible"][0], "subsatellite mode: dayside → threshold 110 → should fail"

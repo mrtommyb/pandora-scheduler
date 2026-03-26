@@ -102,29 +102,255 @@ class _ScienceCalendarBuilder:
         """Get the time limit for an occultation target.
 
         Looks up 'Number of Hours Requested' from the occultation manifest.
-        Raises ValueError if the catalog is missing, the target is not found,
-        or the required column is missing.
+
+        When ``requested_occ_time_override`` is False (default), raises
+        ValueError if the catalog is missing, the target is not found, or
+        the required column is missing.
+
+        When ``requested_occ_time_override`` is True (override enabled), logs a
+        warning and returns a very large effective limit so scheduling
+        can continue.
         """
+        enforce_requested_hours = not self.config.requested_occ_time_override
+        _RELAXED_FALLBACK = timedelta(hours=1_000_000)
+
         if self.occ_catalog is None or self.occ_catalog.empty:
-            raise ValueError(
+            msg = (
                 f"Cannot get time limit for occultation target '{target_name}': "
                 "occultation catalog is not loaded"
             )
+            if enforce_requested_hours:
+                raise ValueError(msg)
+            LOGGER.warning("%s — using unlimited fallback", msg)
+            return _RELAXED_FALLBACK
+
         match = self.occ_catalog[self.occ_catalog["Star Name"] == target_name]
         if match.empty:
-            raise ValueError(f"Occultation target '{target_name}' not found in catalog")
+            msg = f"Occultation target '{target_name}' not found in catalog"
+            if enforce_requested_hours:
+                raise ValueError(msg)
+            LOGGER.warning("%s — using unlimited fallback", msg)
+            return _RELAXED_FALLBACK
+
         if "Number of Hours Requested" not in match.columns:
-            raise ValueError(
+            msg = (
                 "Occultation catalog is missing required 'Number of Hours Requested' "
                 "column"
             )
+            if enforce_requested_hours:
+                raise ValueError(msg)
+            LOGGER.warning("%s — using unlimited fallback", msg)
+            return _RELAXED_FALLBACK
+
         hours_req = match.iloc[0]["Number of Hours Requested"]
         if pd.isna(hours_req):
-            raise ValueError(
+            msg = (
                 f"Occultation target '{target_name}' has missing "
                 "'Number of Hours Requested' value"
             )
+            if enforce_requested_hours:
+                raise ValueError(msg)
+            LOGGER.warning("%s — using unlimited fallback", msg)
+            return _RELAXED_FALLBACK
+
         return timedelta(hours=float(hours_req))
+
+    def _next_chunk_end(
+        self, current: datetime, step: timedelta, segment_stop: datetime
+    ) -> datetime:
+        """Compute the end of the next chunk, absorbing a short tail.
+
+        If emitting a chunk of *step* would leave a remainder shorter than
+        ``min_sequence_minutes``, extend this chunk to *segment_stop* so
+        no short trailing sequence is created.
+        """
+        candidate = min(current + step, segment_stop)
+        if candidate >= segment_stop:
+            return segment_stop
+        remainder = segment_stop - candidate
+        if remainder < timedelta(minutes=self.config.min_sequence_minutes):
+            return segment_stop
+        return candidate
+
+    def _occ_chunk_end(
+        self, current: datetime, segment_stop: datetime
+    ) -> datetime:
+        """Occultation-aware chunk end, respecting break_occultation_sequences."""
+        if self.config.break_occultation_sequences:
+            return self._next_chunk_end(
+                current, self.occultation_limit, segment_stop
+            )
+        return segment_stop
+
+    @staticmethod
+    def _iterate_segments(
+        augmented_changes: List[int],
+        visit_times: List[datetime],
+        visibility_flags: List[int],
+        start: datetime,
+        final_time: datetime,
+    ):
+        """Yield ``(segment_start, segment_stop, is_visible)`` for each
+        visibility-change segment within a visit."""
+        last = len(augmented_changes) - 1
+        for pos, change_idx in enumerate(augmented_changes):
+            seg_start = (
+                start if pos == 0
+                else visit_times[augmented_changes[pos - 1] + 1]
+            )
+            seg_stop = (
+                final_time if pos == last
+                else visit_times[change_idx + 1]
+            )
+            yield seg_start, seg_stop, bool(visibility_flags[change_idx])
+
+    def _merged_segments(
+        self,
+        augmented_changes: List[int],
+        visit_times: List[datetime],
+        visibility_flags: List[int],
+        start: datetime,
+        final_time: datetime,
+    ):
+        """Yield ``(segment_start, segment_stop, is_visible)`` like
+        :meth:`_iterate_segments`, but absorb any segment whose duration is
+        below ``config.min_sequence_minutes`` into its following neighbour
+        (or preceding neighbour when no following one exists).
+
+        When ``min_sequence_minutes`` is 0 the output is identical to
+        :meth:`_iterate_segments`."""
+        threshold = timedelta(minutes=self.config.min_sequence_minutes)
+        segments = list(
+            self._iterate_segments(
+                augmented_changes, visit_times, visibility_flags, start, final_time,
+            )
+        )
+        if not threshold or len(segments) <= 1:
+            yield from segments
+            return
+
+        # Iteratively absorb short segments until stable.
+        changed = True
+        while changed:
+            changed = False
+            merged: list = []
+            i = 0
+            while i < len(segments):
+                seg_start, seg_stop, is_vis = segments[i]
+                duration = seg_stop - seg_start
+                if duration < threshold:
+                    if i + 1 < len(segments):
+                        # Absorb this short segment into the next one.
+                        nxt_start, nxt_stop, nxt_vis = segments[i + 1]
+                        segments[i + 1] = (seg_start, nxt_stop, nxt_vis)
+                        changed = True
+                    elif merged:
+                        # No following segment: absorb into the previous one.
+                        prev_start, prev_stop, prev_vis = merged[-1]
+                        merged[-1] = (prev_start, seg_stop, prev_vis)
+                        changed = True
+                    # If there is neither a previous nor a next segment, we
+                    # must have len(segments) == 1, which is handled by the
+                    # early return above, so no action is needed here.
+                else:
+                    merged.append((seg_start, seg_stop, is_vis))
+                i += 1
+            segments = merged
+
+        yield from segments
+
+    def _emit_science_sequences(
+        self,
+        visit_element: ET.Element,
+        seq_counter: int,
+        target_name: str,
+        segment_start: datetime,
+        segment_stop: datetime,
+        ra_value: float,
+        dec_value: float,
+        target_info: Optional[pd.DataFrame],
+        priority_flag: bool,
+        transit_start: Sequence[datetime],
+        transit_stop: Sequence[datetime],
+    ) -> int:
+        """Emit chunked science observation sequences.  Returns updated
+        *seq_counter*."""
+        min_td = timedelta(minutes=self.config.min_sequence_minutes)
+        if min_td and (segment_stop - segment_start) < min_td:
+            LOGGER.debug(
+                "Skipping short science segment for %s (%s < %d min)",
+                target_name,
+                segment_stop - segment_start,
+                self.config.min_sequence_minutes,
+            )
+            return seq_counter
+        current = segment_start
+        while current < segment_stop:
+            next_value = self._next_chunk_end(
+                current, self.sequence_duration, segment_stop
+            )
+            priority = _target_priority(
+                priority_flag, transit_start, transit_stop, current, next_value,
+            )
+            observation_sequence(
+                visit_element,
+                f"{seq_counter:03d}",
+                target_name,
+                priority,
+                current.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                ra_value,
+                dec_value,
+                target_info if target_info is not None else pd.DataFrame(),
+            )
+            seq_counter += 1
+            current = next_value
+        return seq_counter
+
+    def _emit_occultation_sequences(
+        self,
+        visit_element: ET.Element,
+        seq_counter: int,
+        occ_target: str,
+        segment_start: datetime,
+        segment_stop: datetime,
+        ra_occ: float,
+        dec_occ: float,
+        occ_info: Optional[pd.DataFrame],
+    ) -> int:
+        """Emit chunked occultation observation sequences.  Returns updated
+        *seq_counter*."""
+        current = segment_start
+        while current < segment_stop:
+            current_occ_time = self.occultation_obs_time.get(occ_target, timedelta())
+            target_time_limit = self._get_occultation_time_limit(occ_target)
+            if current_occ_time >= target_time_limit:
+                LOGGER.info(
+                    "Skipping %s: exceeded occultation time limit (%.1f/%.1f hrs)",
+                    occ_target,
+                    current_occ_time.total_seconds() / 3600,
+                    target_time_limit.total_seconds() / 3600,
+                )
+                break
+            next_value = self._occ_chunk_end(current, segment_stop)
+            observation_sequence(
+                visit_element,
+                f"{seq_counter:03d}",
+                occ_target,
+                "0",
+                current.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                ra_occ,
+                dec_occ,
+                occ_info if occ_info is not None else pd.DataFrame(),
+            )
+            self.occultation_obs_time[occ_target] = (
+                self.occultation_obs_time.get(occ_target, timedelta())
+                + (next_value - current)
+            )
+            seq_counter += 1
+            current = next_value
+        return seq_counter
 
     def build_calendar(self) -> ET.Element:
         root = ET.Element("ScienceCalendar", xmlns="/pandora/calendar/")
@@ -298,7 +524,10 @@ class _ScienceCalendarBuilder:
                 return
 
         visibility_changes = _visibility_change_indices(visibility_flags)
-        final_time = visit_times[-1]
+        # Use the CSV stop boundary (not visit_times[-1]) so the XML visit
+        # spans the full scheduled window and no 1-minute inter-visit gap
+        # is introduced by visibility-sample rounding.
+        final_time = stop
         seq_counter = 1
 
         if not visibility_changes:
@@ -322,136 +551,220 @@ class _ScienceCalendarBuilder:
             visibility_changes,
         )
 
-        occultation_info = self._find_occultation_target(
-            oc_starts,
-            oc_stops,
-            start,
-            final_time,
-            ra_value,
-            dec_value,
-        )
-        if occultation_info is None:
-            LOGGER.warning(
-                "Unable to schedule occultation target for %s between %s and %s",
-                target_name,
-                start,
-                final_time,
-            )
+        # --- Path 1: occultation XML disabled — science-only ---------------
+        if not self.config.enable_occultation_xml:
+            for seg_start, seg_stop, is_visible in self._merged_segments(
+                augmented_changes, visit_times, visibility_flags, start, final_time,
+            ):
+                if is_visible:
+                    seq_counter = self._emit_science_sequences(
+                        visit_element, seq_counter, target_name,
+                        seg_start, seg_stop, ra_value, dec_value,
+                        target_info, priority_flag, transit_start, transit_stop,
+                    )
             return
 
-        occ_df, scheduled = occultation_info
-        if not scheduled or occ_df is None:
+        # --- Resolve the occultation source for this visit ------------------
+        occultation_info = self._find_occultation_target(
+            oc_starts, oc_stops, start, final_time, ra_value, dec_value,
+        )
+
+        # Determine whether we have a scheduled occ_df or need a fallback.
+        occ_df: Optional[pd.DataFrame] = None
+        fallback_occultation: Optional[
+            tuple[str, float, float, Optional[pd.DataFrame]]
+        ] = None
+
+        if occultation_info is not None:
+            occ_df, scheduled = occultation_info
+            if not scheduled or occ_df is None:
+                occ_df = None
+
+        if occ_df is None:
             LOGGER.warning(
                 "Unable to schedule occultation target for %s between %s and %s",
-                target_name,
-                start,
-                final_time,
+                target_name, start, final_time,
             )
+
+        # --- Path 2: catalog-fallback occultation (no occ_df) ---------------
+        if occ_df is None:
+            for seg_start, seg_stop, is_visible in self._merged_segments(
+                augmented_changes, visit_times, visibility_flags, start, final_time,
+            ):
+                if is_visible:
+                    seq_counter = self._emit_science_sequences(
+                        visit_element, seq_counter, target_name,
+                        seg_start, seg_stop, ra_value, dec_value,
+                        target_info, priority_flag, transit_start, transit_stop,
+                    )
+                else:
+                    # Select per-segment so the visibility check uses the
+                    # actual dark-gap times — a target visible in one gap
+                    # may violate sun keepout in another.
+                    fallback_occultation = self._select_fallback_occultation_target(
+                        ra_value, dec_value,
+                        seg_start=seg_start, seg_stop=seg_stop,
+                    )
+                    if fallback_occultation is not None:
+                        occ_target, ra_occ, dec_occ, occ_info = fallback_occultation
+                        seq_counter = self._emit_occultation_sequences(
+                            visit_element, seq_counter, occ_target,
+                            seg_start, seg_stop, ra_occ, dec_occ, occ_info,
+                        )
             return
+
+        # --- Path 3: scheduled occ_df available -----------------------------
+        occ_time_index: Optional[pd.DataFrame] = None
+        if {"start", "stop", "Target"}.issubset(set(occ_df.columns)):
+            occ_time_index = occ_df.copy()
+            try:
+                occ_time_index["_start_dt"] = pd.to_datetime(
+                    occ_time_index["start"], utc=True, format="ISO8601", errors="coerce"
+                ).dt.tz_localize(None)
+                occ_time_index["_stop_dt"] = pd.to_datetime(
+                    occ_time_index["stop"], utc=True, format="ISO8601", errors="coerce"
+                ).dt.tz_localize(None)
+                occ_time_index = occ_time_index.dropna(
+                    subset=["_start_dt", "_stop_dt", "Target"]
+                )
+            except Exception:
+                occ_time_index = None
 
         oc_index = 0
-        for change_position, change_idx in enumerate(augmented_changes):
-            if change_position == 0:
-                segment_start = visit_times[0]
-            else:
-                segment_start = visit_times[augmented_changes[change_position - 1] + 1]
-
-            segment_stop = visit_times[change_idx]
-            is_visible = bool(visibility_flags[change_idx])
-
+        for seg_start, seg_stop, is_visible in self._merged_segments(
+            augmented_changes, visit_times, visibility_flags, start, final_time,
+        ):
             if is_visible:
-                current = segment_start
-                while current < segment_stop:
-                    next_value = min(current + self.sequence_duration, segment_stop)
-                    priority = _target_priority(
-                        priority_flag,
-                        transit_start,
-                        transit_stop,
-                        current,
-                        next_value,
+                seq_counter = self._emit_science_sequences(
+                    visit_element, seq_counter, target_name,
+                    seg_start, seg_stop, ra_value, dec_value,
+                    target_info, priority_flag, transit_start, transit_stop,
+                )
+                continue
+
+            # Occultation segment — iterate using scheduled occ_df.
+            current = seg_start
+            while current < seg_stop:
+                next_value = self._occ_chunk_end(current, seg_stop)
+
+                if oc_index >= len(occ_df):
+                    # Pre-built schedule exhausted — fall back to catalog
+                    # after the loop via the post-loop fallback block.
+                    break
+
+                # Prefer time-based lookup; fall back to positional index.
+                occ_row = None
+                used_fallback_row = False
+                if occ_time_index is not None and not occ_time_index.empty:
+                    exact_mask = (
+                        (occ_time_index["_start_dt"] <= current)
+                        & (occ_time_index["_stop_dt"] >= next_value)
                     )
-                    observation_sequence(
-                        visit_element,
-                        f"{seq_counter:03d}",
-                        target_name,
-                        priority,
-                        current.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        ra_value,
-                        dec_value,
-                        target_info if target_info is not None else pd.DataFrame(),
-                    )
-                    seq_counter += 1
-                    current = next_value
-            else:
-                current = segment_start
-                while current < segment_stop:
-                    next_value = (
-                        min(current + self.occultation_limit, segment_stop)
-                        if self.config.break_occultation_sequences
-                        else segment_stop
-                    )
-                    if occ_df is None or oc_index >= len(occ_df):
-                        LOGGER.warning(
-                            "Ran out of occultation targets for %s between %s and %s",
-                            target_name,
-                            current,
-                            next_value,
+                    if exact_mask.any():
+                        occ_row = occ_time_index.loc[exact_mask].iloc[0]
+                    else:
+                        overlap_mask = (
+                            (occ_time_index["_start_dt"] < next_value)
+                            & (occ_time_index["_stop_dt"] > current)
                         )
-                        break
+                        if overlap_mask.any():
+                            occ_row = occ_time_index.loc[overlap_mask].iloc[0]
 
-                    occ_target = str(occ_df.iloc[oc_index]["Target"])
+                if occ_row is None:
+                    occ_row = occ_df.iloc[oc_index]
+                    used_fallback_row = True
 
-                    # Check if this occultation target has exceeded its time limit
-                    current_occ_time = self.occultation_obs_time.get(
-                        occ_target, timedelta()
-                    )
-                    target_time_limit = self._get_occultation_time_limit(occ_target)
-                    if current_occ_time >= target_time_limit:
-                        LOGGER.info(
-                            "Skipping %s: exceeded occultation time limit (%.1f/%.1f hrs)",
-                            occ_target,
-                            current_occ_time.total_seconds() / 3600,
-                            target_time_limit.total_seconds() / 3600,
-                        )
-                        oc_index += 1
-                        continue
+                occ_target = str(occ_row["Target"])
 
-                    occ_info = _lookup_occultation_info(
+                # Check if this occultation target has exceeded its time limit
+                current_occ_time = self.occultation_obs_time.get(
+                    occ_target, timedelta()
+                )
+                target_time_limit = self._get_occultation_time_limit(occ_target)
+                if current_occ_time >= target_time_limit:
+                    LOGGER.info(
+                        "Skipping %s: exceeded occultation time limit "
+                        "(%.1f/%.1f hrs)",
                         occ_target,
-                        self.target_catalog,
-                        self.aux_catalog,
-                        self.occ_catalog,
+                        current_occ_time.total_seconds() / 3600,
+                        target_time_limit.total_seconds() / 3600,
                     )
-                    ra_occ = _fallback_float(
-                        occ_df.iloc[oc_index].get("RA"), occ_info, "RA"
-                    )
-                    dec_occ = _fallback_float(
-                        occ_df.iloc[oc_index].get("DEC"), occ_info, "DEC"
-                    )
-
-                    observation_sequence(
-                        visit_element,
-                        f"{seq_counter:03d}",
-                        occ_target,
-                        "0",
-                        current.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        ra_occ,
-                        dec_occ,
-                        occ_info if occ_info is not None else pd.DataFrame(),
-                    )
-
-                    # Track the observation time for this occultation target
-                    sequence_duration = next_value - current
-                    self.occultation_obs_time[occ_target] = (
-                        self.occultation_obs_time.get(occ_target, timedelta())
-                        + sequence_duration
-                    )
-
-                    seq_counter += 1
                     oc_index += 1
-                    current = next_value
+                    continue
+
+                # Visibility gate: reject targets that violate keepout
+                # constraints (e.g. sun keepout) at the scheduled time.
+                # When allow_occ_startracker_violation is enabled, targets
+                # with ST-only violations are still accepted.
+                acceptable, _st_frac = self._occ_visibility_score(
+                    occ_target, current, next_value,
+                )
+                if not acceptable:
+                    LOGGER.debug(
+                        "Skipping occultation target %s (%s–%s): "
+                        "not visible (keepout constraint violated)",
+                        occ_target, current, next_value,
+                    )
+                    oc_index += 1
+                    continue
+
+                occ_info = _lookup_occultation_info(
+                    occ_target,
+                    self.target_catalog,
+                    self.aux_catalog,
+                    self.occ_catalog,
+                )
+                ra_occ = _fallback_float(
+                    occ_row.get("RA"), occ_info, "RA"
+                )
+                dec_occ = _fallback_float(
+                    occ_row.get("DEC"), occ_info, "DEC"
+                )
+
+                observation_sequence(
+                    visit_element,
+                    f"{seq_counter:03d}",
+                    occ_target,
+                    "0",
+                    current.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    next_value.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    ra_occ,
+                    dec_occ,
+                    occ_info if occ_info is not None else pd.DataFrame(),
+                )
+
+                sequence_duration = next_value - current
+                self.occultation_obs_time[occ_target] = (
+                    self.occultation_obs_time.get(occ_target, timedelta())
+                    + sequence_duration
+                )
+
+                seq_counter += 1
+                if used_fallback_row:
+                    oc_index += 1
+                current = next_value
+
+            # After exhausting occ_df rows, try catalog fallback for any
+            # remaining dark time in this segment.
+            if current < seg_stop:
+                fallback = self._select_fallback_occultation_target(
+                    ra_value, dec_value,
+                    seg_start=current, seg_stop=seg_stop,
+                )
+                if fallback is not None:
+                    fb_target, fb_ra, fb_dec, fb_info = fallback
+                    seq_counter = self._emit_occultation_sequences(
+                        visit_element, seq_counter, fb_target,
+                        current, seg_stop, fb_ra, fb_dec, fb_info,
+                    )
+                    current = seg_stop
+                else:
+                    gap_minutes = (seg_stop - current).total_seconds() / 60
+                    LOGGER.warning(
+                        "No visible occultation target for %s during "
+                        "dark gap %s–%s (%.0f min gap in XML)",
+                        target_name, current, seg_stop, gap_minutes,
+                    )
 
     def _emit_full_visibility(
         self,
@@ -466,7 +779,10 @@ class _ScienceCalendarBuilder:
         transit_start: Sequence[datetime],
         transit_stop: Sequence[datetime],
     ) -> None:
-        segments = break_long_sequences(start, stop, self.sequence_duration)
+        segments = break_long_sequences(
+            start, stop, self.sequence_duration,
+            min_chunk=timedelta(minutes=self.config.min_sequence_minutes),
+        )
         seq_counter = 1
         for seg_start, seg_stop in segments:
             priority = _target_priority(
@@ -488,6 +804,202 @@ class _ScienceCalendarBuilder:
                 target_info if target_info is not None else pd.DataFrame(),
             )
             seq_counter += 1
+
+    def _is_target_visible_in_segment(
+        self,
+        star_name: str,
+        seg_start: datetime,
+        seg_stop: datetime,
+    ) -> bool:
+        """Return True if *star_name* has any visible minutes in [seg_start, seg_stop).
+
+        Reads the target's ``aux_targets`` visibility parquet and checks the
+        pre-computed ``Visible`` flag.  Returns False when the target is not
+        visible or when visibility data cannot be loaded.
+        """
+        vis_df = _read_visibility(
+            self.data_dir / "aux_targets" / star_name, star_name,
+        )
+        if vis_df is None or vis_df.empty:
+            return False
+
+        if "Time_UTC" in vis_df.columns and pd.api.types.is_datetime64_any_dtype(
+            vis_df["Time_UTC"]
+        ):
+            times = vis_df["Time_UTC"].to_numpy(dtype="datetime64[ns]")
+            mask = (
+                (times >= np.datetime64(seg_start))
+                & (times < np.datetime64(seg_stop))
+            )
+        elif "Time(MJD_UTC)" in vis_df.columns:
+            start_mjd = Time(seg_start).mjd
+            stop_mjd = Time(seg_stop).mjd
+            mjd = vis_df["Time(MJD_UTC)"].to_numpy(dtype=float)
+            mask = (mjd >= start_mjd) & (mjd < stop_mjd)
+        else:
+            return False
+
+        segment_vis = vis_df.loc[mask, "Visible"]
+        if segment_vis.empty:
+            return False
+        return bool((segment_vis > 0).any())
+
+    def _occ_visibility_score(
+        self,
+        star_name: str,
+        seg_start: datetime,
+        seg_stop: datetime,
+    ) -> tuple[bool, float]:
+        """Score an occultation candidate's visibility in *[seg_start, seg_stop)*.
+
+        Returns ``(acceptable, st_violation_frac)`` where:
+
+        * *acceptable* — True if the target may be scheduled.  Always True when
+          fully visible.  When ``allow_occ_startracker_violation`` is enabled,
+          also True if the **only** keepout failure is star-tracker (boresight
+          Sun/Moon/Earth constraints all pass).
+        * *st_violation_frac* — fraction of segment minutes where the target
+          is not visible (0.0 when fully visible, >0 for ST-only violations).
+          Used to rank candidates: lower is better.
+        """
+        # Fast path: fully visible → always acceptable.
+        if self._is_target_visible_in_segment(star_name, seg_start, seg_stop):
+            return True, 0.0
+
+        if not self.config.allow_occ_startracker_violation:
+            return False, 1.0
+
+        # Extended check: read boresight separation columns to determine
+        # whether non-visibility is solely due to star-tracker keepout.
+        vis_df = _read_visibility_extended(
+            self.data_dir / "aux_targets" / star_name, star_name,
+        )
+        if vis_df is None or vis_df.empty:
+            return False, 1.0
+
+        # Build time mask for the segment.
+        if "Time_UTC" in vis_df.columns and pd.api.types.is_datetime64_any_dtype(
+            vis_df["Time_UTC"]
+        ):
+            times = vis_df["Time_UTC"].to_numpy(dtype="datetime64[ns]")
+            mask = (
+                (times >= np.datetime64(seg_start))
+                & (times < np.datetime64(seg_stop))
+            )
+        elif "Time(MJD_UTC)" in vis_df.columns:
+            start_mjd = Time(seg_start).mjd
+            stop_mjd = Time(seg_stop).mjd
+            mjd = vis_df["Time(MJD_UTC)"].to_numpy(dtype=float)
+            mask = (mjd >= start_mjd) & (mjd < stop_mjd)
+        else:
+            return False, 1.0
+
+        seg = vis_df.loc[mask]
+        if seg.empty:
+            return False, 1.0
+
+        # Verify that the required separation columns exist.
+        needed = {"Sun_Sep", "Moon_Sep", "Earth_Sep"}
+        if not needed.issubset(seg.columns):
+            return False, 1.0
+
+        # Check boresight constraints on every minute in the segment.
+        boresight_ok = (
+            (seg["Sun_Sep"] >= self.config.sun_avoidance_deg)
+            & (seg["Moon_Sep"] >= self.config.moon_avoidance_deg)
+            & (seg["Earth_Sep"] >= self.config.earth_avoidance_deg)
+        )
+
+        if not boresight_ok.all():
+            # At least one minute fails a boresight constraint — reject.
+            return False, 1.0
+
+        # Boresight passes everywhere → failure is star-tracker only.
+        n_total = len(seg)
+        n_not_visible = int((seg["Visible"] <= 0).sum())
+        st_frac = n_not_visible / n_total if n_total else 1.0
+
+        LOGGER.debug(
+            "Occultation candidate %s: ST-only violation %.0f%% of segment "
+            "(%s–%s)",
+            star_name, st_frac * 100, seg_start, seg_stop,
+        )
+        return True, st_frac
+
+    def _select_fallback_occultation_target(
+        self,
+        reference_ra: float,
+        reference_dec: float,
+        seg_start: Optional[datetime] = None,
+        seg_stop: Optional[datetime] = None,
+    ) -> Optional[tuple[str, float, float, Optional[pd.DataFrame]]]:
+        if self.occ_catalog is None or self.occ_catalog.empty:
+            return None
+        if "Star Name" not in self.occ_catalog.columns:
+            return None
+
+        candidates = self.occ_catalog.copy()
+        # Each accepted row carries its ST-violation fraction for ranking.
+        scored_rows: list[tuple[pd.Series, float]] = []
+        for _, row in candidates.iterrows():
+            name = str(row.get("Star Name", "")).strip()
+            if not name:
+                continue
+            current_occ_time = self.occultation_obs_time.get(name, timedelta())
+            if current_occ_time >= self._get_occultation_time_limit(name):
+                continue
+            # When segment times are provided, filter by visibility score
+            # (respects allow_occ_startracker_violation).
+            if seg_start is not None and seg_stop is not None:
+                acceptable, st_frac = self._occ_visibility_score(
+                    name, seg_start, seg_stop,
+                )
+                if not acceptable:
+                    LOGGER.debug(
+                        "Skipping occultation candidate %s: not visible "
+                        "between %s and %s",
+                        name, seg_start, seg_stop,
+                    )
+                    continue
+                scored_rows.append((row, st_frac))
+            else:
+                scored_rows.append((row, 0.0))
+
+        if not scored_rows:
+            return None
+
+        # Sort: prefer fully-visible (st_frac == 0) first, then least ST
+        # violation.  Within the same tier, preserve catalog/slew order.
+        scored_rows.sort(key=lambda r: r[1])
+
+        available_rows = [r[0] for r in scored_rows]
+        candidates = pd.DataFrame(available_rows)
+        if self.config.prioritise_occultations_by_slew:
+            # Slew-priority sorting only among the best ST-violation tier.
+            # Extract the best (lowest) fraction and filter to that tier,
+            # then slew-sort within it.
+            best_frac = scored_rows[0][1]
+            tier_rows = [r for r, f in scored_rows if f <= best_frac + 1e-9]
+            tier_df = pd.DataFrame(tier_rows)
+            tier_df = _prioritise_occultation_targets(
+                tier_df, reference_ra, reference_dec,
+            )
+            candidates = tier_df
+
+        chosen = candidates.iloc[0]
+        occ_target = str(chosen.get("Star Name", "")).strip()
+        if not occ_target:
+            return None
+
+        occ_info = _lookup_occultation_info(
+            occ_target,
+            self.target_catalog,
+            self.aux_catalog,
+            self.occ_catalog,
+        )
+        ra_occ = _fallback_float(chosen.get("RA"), occ_info, "RA")
+        dec_occ = _fallback_float(chosen.get("DEC"), occ_info, "DEC")
+        return occ_target, ra_occ, dec_occ, occ_info
 
     def _find_occultation_target(
         self,
@@ -518,6 +1030,14 @@ class _ScienceCalendarBuilder:
             expanded_starts = list(starts)
             expanded_stops = list(stops)
 
+        expanded_starts, expanded_stops = _merge_short_occultation_segments(
+            expanded_starts,
+            expanded_stops,
+            self.config.min_sequence_minutes,
+        )
+        if not expanded_starts:
+            return None
+
         candidates: List[Tuple[Path, str, Path]] = [
             (
                 self.data_dir / "occultation-standard_targets.csv",
@@ -535,23 +1055,52 @@ class _ScienceCalendarBuilder:
             if obs_time >= self._get_occultation_time_limit(name)
         }
 
-        for csv_path, label, vis_root in candidates:
-            result_df, flag = _build_occultation_schedule(
-                expanded_starts,
-                expanded_stops,
+        def _try_candidates(excluded: Optional[set]) -> Optional[tuple[pd.DataFrame, bool]]:
+            for csv_path, label, vis_root in candidates:
+                result_df, flag = _build_occultation_schedule(
+                    expanded_starts,
+                    expanded_stops,
+                    visit_start,
+                    visit_stop,
+                    csv_path,
+                    vis_root,
+                    label,
+                    reference_ra,
+                    reference_dec,
+                    self.config.prioritise_occultations_by_slew,
+                    excluded,
+                    show_progress=self.config.show_progress,
+                    use_pass1=self.config.enable_occultation_pass1,
+                )
+                if flag and result_df is not None:
+                    return result_df, True
+            return None
+
+        result = _try_candidates(excluded_targets)
+        if result is not None:
+            return result
+
+        # If strict limits are disabled, retry without exclusions.
+        if (self.config.requested_occ_time_override) and excluded_targets:
+            LOGGER.warning(
+                "No occultation target assigned for %s..%s with %d targets excluded "
+                "by time limits; retrying without exclusions",
                 visit_start,
                 visit_stop,
-                csv_path,
-                vis_root,
-                label,
-                reference_ra,
-                reference_dec,
-                self.config.prioritise_occultations_by_slew,
-                excluded_targets,
-                show_progress=self.config.show_progress,
+                len(excluded_targets),
             )
-            if flag and result_df is not None:
-                return result_df, True
+            result = _try_candidates(set())
+            if result is not None:
+                return result
+
+        LOGGER.warning(
+            "Occultation assignment failed for %s..%s (excluded_targets=%d, "
+            "requested_hours_override=%s)",
+            visit_start,
+            visit_stop,
+            len(excluded_targets),
+            self.config.requested_occ_time_override,
+        )
         return None
 
 
@@ -568,7 +1117,13 @@ def _normalise_target_name(target: str) -> tuple[str, str]:
     if target.endswith("STD"):
         stripped = target[:-4]
         return stripped, stripped
-    if target.endswith(tuple("bcdef")) and target not in ("EV_Lac", "AF_Psc"):
+    # Star names whose trailing letter coincidentally matches a planet-suffix
+    # character (b/c/d/e/f).  Add entries here when a new catalogue target
+    # ends with one of those letters but is NOT a planet designation.
+    _STAR_NAME_EXCEPTIONS = frozenset(
+        {"EV_Lac", "AF_Psc", "AU_Mic", "55_Cnc", "AO_Cassiopeiae"}
+    )
+    if target.endswith(tuple("bcdef")) and target not in _STAR_NAME_EXCEPTIONS:
         return target, target[:-1].strip()
     return target, target
 
@@ -657,6 +1212,29 @@ def _lookup_occultation_info(
         return occ_match.head(1)
 
     return None
+
+
+def _read_visibility_extended(
+    directory: Path, name: str,
+) -> Optional[pd.DataFrame]:
+    """Read visibility parquet with boresight separation columns.
+
+    Returns a DataFrame with Time, Visible, Sun_Sep, Moon_Sep, Earth_Sep
+    (when available).  Falls back gracefully when separation columns are
+    absent (older parquet files).
+    """
+    path = directory / f"Visibility for {name}.parquet"
+    cols = [
+        "Time(MJD_UTC)", "Time_UTC", "Visible",
+        "Sun_Sep", "Moon_Sep", "Earth_Sep",
+    ]
+    df = read_parquet_cached(str(path), columns=cols)
+    if df is None:
+        # Fall back to minimal columns (older parquet).
+        df = read_parquet_cached(
+            str(path), columns=["Time(MJD_UTC)", "Visible"],
+        )
+    return df
 
 
 def _read_visibility(directory: Path, name: str) -> Optional[pd.DataFrame]:
@@ -799,6 +1377,91 @@ def _visibility_change_indices(flags: Sequence[int]) -> List[int]:
     return [idx for idx in range(len(flags) - 1) if flags[idx] != flags[idx + 1]]
 
 
+def _merge_short_occultation_segments(
+    starts: Sequence[datetime],
+    stops: Sequence[datetime],
+    min_sequence_minutes: int,
+) -> tuple[List[datetime], List[datetime]]:
+    """Merge occultation segments shorter than *min_sequence_minutes*.
+
+    Merge policy per contiguous run:
+    - short segment at run start -> merge forward
+    - short segment at run end -> merge backward
+    - isolated short segment -> drop
+    """
+    if not starts or not stops:
+        return [], []
+    if min_sequence_minutes <= 0:
+        return list(starts), list(stops)
+
+    threshold = timedelta(minutes=min_sequence_minutes)
+    ordered = sorted(zip(starts, stops), key=lambda item: item[0])
+
+    # Group segments into contiguous runs (allow tiny boundary jitter).
+    runs: List[List[List[datetime]]] = []
+    current_run: List[List[datetime]] = []
+    adjacency_tolerance = timedelta(seconds=1)
+
+    for start, stop in ordered:
+        if stop <= start:
+            continue
+        if not current_run:
+            current_run = [[start, stop]]
+            continue
+        if start <= current_run[-1][1] + adjacency_tolerance:
+            current_run.append([start, stop])
+        else:
+            runs.append(current_run)
+            current_run = [[start, stop]]
+    if current_run:
+        runs.append(current_run)
+
+    merged: List[tuple[datetime, datetime]] = []
+    dropped_short_isolated = 0
+
+    for run in runs:
+        if len(run) == 1:
+            seg_start, seg_stop = run[0]
+            if (seg_stop - seg_start) < threshold:
+                dropped_short_isolated += 1
+                continue
+
+        # Iteratively merge short boundary segments into neighbours.
+        changed = True
+        while changed and len(run) > 1:
+            changed = False
+            for idx_seg, (seg_start, seg_stop) in enumerate(run):
+                if (seg_stop - seg_start) >= threshold:
+                    continue
+                if idx_seg == 0:
+                    run[1][0] = seg_start
+                    del run[0]
+                    changed = True
+                    break
+                if idx_seg == len(run) - 1:
+                    run[idx_seg - 1][1] = seg_stop
+                    del run[idx_seg]
+                    changed = True
+                    break
+                run[idx_seg - 1][1] = seg_stop
+                del run[idx_seg]
+                changed = True
+                break
+
+        merged.extend((segment[0], segment[1]) for segment in run)
+
+    if dropped_short_isolated > 0:
+        LOGGER.info(
+            "Dropped %d isolated occultation segment(s) shorter than %d min",
+            dropped_short_isolated,
+            min_sequence_minutes,
+        )
+
+    if not merged:
+        return [], []
+    return [item[0] for item in merged], [item[1] for item in merged]
+
+
 def _occultation_windows(
     visit_times: Sequence[datetime],
     visibility_flags: Sequence[int],
@@ -837,7 +1500,22 @@ def _occultation_windows(
     if len(occ_starts) != len(occ_stops):
         raise ValueError("Occultation start/stop lists are mismatched")
 
-    return occ_starts, occ_stops, changes
+    # Remove degenerate windows produced by boundary/rounding effects.
+    filtered_pairs = [
+        (start, stop) for start, stop in zip(occ_starts, occ_stops) if stop > start
+    ]
+    if len(filtered_pairs) != len(occ_starts):
+        LOGGER.debug(
+            "Dropped %d degenerate occultation window(s) at extraction",
+            len(occ_starts) - len(filtered_pairs),
+        )
+    if not filtered_pairs:
+        return [], [], changes
+    return (
+        [pair[0] for pair in filtered_pairs],
+        [pair[1] for pair in filtered_pairs],
+        changes,
+    )
 
 
 def _prioritise_occultation_targets(
@@ -894,9 +1572,27 @@ def _build_occultation_schedule(
     prioritise_by_slew: bool,
     excluded_targets: Optional[set] = None,
     show_progress: bool = False,
+    use_pass1: bool = True,
 ) -> tuple[Optional[pd.DataFrame], bool]:
     if not starts or not stops:
         return None, False
+
+    # Guard against degenerate windows introduced by boundary rounding.
+    filtered_pairs = [
+        (start, stop) for start, stop in zip(starts, stops) if stop > start
+    ]
+    dropped_intervals = len(list(zip(starts, stops))) - len(filtered_pairs)
+    if dropped_intervals > 0:
+        LOGGER.info(
+            "%s..%s: dropped %d degenerate occultation interval(s)",
+            visit_start,
+            visit_stop,
+            dropped_intervals,
+        )
+    if not filtered_pairs:
+        return None, False
+    starts = [pair[0] for pair in filtered_pairs]
+    stops = [pair[1] for pair in filtered_pairs]
 
     schedule_rows = [
         [
@@ -957,6 +1653,7 @@ def _build_occultation_schedule(
         occ_list,
         label,
         show_progress=show_progress,
+        use_pass1=use_pass1,
     )
     return occ_df, flag
 

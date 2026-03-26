@@ -55,6 +55,44 @@ def test_remove_short_sequences_filters_runs():
     assert spans == [(0, 1)]
 
 
+def test_remove_short_sequences_fills_short_gaps():
+    """Pass 2: short non-visible gaps between visible regions are filled."""
+    # 5 vis, 2 novis, 5 vis — the 2-element gap should be filled
+    array = np.array([1] * 5 + [0] * 2 + [1] * 5)
+    trimmed, spans = remove_short_sequences(array, 3)
+    assert np.all(trimmed == 1.0), "Short gap should be filled"
+    assert spans == []
+
+
+def test_remove_short_sequences_keeps_long_gaps():
+    """Pass 2: gaps >= threshold are preserved."""
+    # 5 vis, 4 novis, 5 vis — gap of 4 should NOT be filled (threshold=3)
+    array = np.array([1] * 5 + [0] * 4 + [1] * 5)
+    trimmed, spans = remove_short_sequences(array, 3)
+    assert np.all(trimmed[5:9] == 0.0), "Long gap should be preserved"
+
+
+def test_remove_short_sequences_no_fill_leading_trailing():
+    """Pass 2: leading/trailing zeros are not filled."""
+    # 3 novis, 5 vis, 2 novis — neither edge gap should be filled
+    array = np.array([0] * 3 + [1] * 5 + [0] * 2)
+    trimmed, spans = remove_short_sequences(array, 3)
+    assert np.all(trimmed[:3] == 0.0), "Leading gap should not be filled"
+    assert np.all(trimmed[8:] == 0.0), "Trailing gap should not be filled"
+
+
+def test_remove_short_sequences_orbit_pattern():
+    """Simulated orbit: 24vis, 2novis, 16vis, 51novis, 7vis."""
+    flags = np.array([1] * 24 + [0] * 2 + [1] * 16 + [0] * 51 + [1] * 7)
+    trimmed, _ = remove_short_sequences(flags, 10)
+    # The 2-element gap should be filled → 42 continuous visible
+    assert np.all(trimmed[:42] == 1.0)
+    # The 51-element gap is preserved
+    assert np.all(trimmed[42:93] == 0.0)
+    # Trailing 7-element visible run < 10 → removed by Pass 1
+    assert np.all(trimmed[93:] == 0.0)
+
+
 def test_break_long_sequences_partitions_range():
     start = datetime(2025, 5, 1, 0, 0, 0)
     end = start + timedelta(minutes=5)

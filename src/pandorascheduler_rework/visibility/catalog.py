@@ -17,7 +17,10 @@ from astropy.coordinates import EarthLocation, SkyCoord
 from astropy.time import Time
 from tqdm import tqdm
 
-from pandorascheduler_rework.config import PandoraSchedulerConfig
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from pandorascheduler_rework.config import PandoraSchedulerConfig, resolve_data_subdir
 from pandorascheduler_rework.utils.io import read_csv_cached, read_parquet_cached
 
 from .constraints import (
@@ -35,6 +38,32 @@ from .geometry import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _write_visibility_parquet(
+    df: pd.DataFrame,
+    path_or_buf: Path | io.BytesIO,
+    config: PandoraSchedulerConfig,
+) -> None:
+    """Write *df* to parquet with keepout-angle metadata in the schema."""
+    table = pa.Table.from_pandas(df, preserve_index=False)
+    existing = table.schema.metadata or {}
+    existing.update(
+        {
+            b"pandora.visibility_sun_deg": str(config.sun_avoidance_deg).encode(),
+            b"pandora.visibility_moon_deg": str(config.moon_avoidance_deg).encode(),
+            b"pandora.visibility_earth_deg": str(config.earth_avoidance_deg).encode(),
+        }
+    )
+    table = table.replace_schema_metadata(existing)
+    pq.write_table(
+        table,
+        path_or_buf,
+        compression="snappy",
+        write_statistics=False,
+        use_dictionary=False,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Worker state for multiprocessing (set once per worker via _init_worker)
@@ -68,14 +97,7 @@ def _worker_build_star(
     if not is_exoplanet:
         df["Time(MJD_UTC)"] = np.round(df["Time(MJD_UTC)"], 6)
     buf = io.BytesIO()
-    df.to_parquet(
-        buf,
-        index=False,
-        engine="pyarrow",
-        compression="snappy",
-        write_statistics=False,
-        use_dictionary=False,
-    )
+    _write_visibility_parquet(df, buf, _worker_config)
     return star_name, buf.getvalue()
 
 
@@ -90,7 +112,13 @@ def build_visibility_catalog(
     if not config.output_dir:
         raise ValueError("config.output_dir is required for visibility generation")
 
-    output_root = config.output_dir / "data" / output_subpath
+    data_subdir = resolve_data_subdir(
+        config.extra_inputs,
+        sun_avoidance_deg=config.sun_avoidance_deg,
+        moon_avoidance_deg=config.moon_avoidance_deg,
+        earth_avoidance_deg=config.earth_avoidance_deg,
+    )
+    output_root = config.output_dir / data_subdir / output_subpath
     output_root.mkdir(parents=True, exist_ok=True)
 
     target_path = target_list if target_list.is_absolute() else target_list.resolve()
@@ -197,14 +225,7 @@ def build_visibility_catalog(
                         visibility_df["Time(MJD_UTC)"], 6
                     )
 
-                visibility_df.to_parquet(
-                    output_path,
-                    index=False,
-                    engine="pyarrow",
-                    compression="snappy",
-                    write_statistics=False,
-                    use_dictionary=False,
-                )
+                _write_visibility_parquet(visibility_df, output_path, config)
     else:
         # Still need star_metadata for planet transits
         star_metadata = _build_star_metadata(target_manifest)
@@ -232,7 +253,7 @@ def build_visibility_catalog(
             )
         )
 
-    _apply_transit_overlaps(generated_planets, output_root)
+    _apply_transit_overlaps(generated_planets, output_root, config)
 
 
 def _load_target_manifest(
@@ -340,6 +361,7 @@ def _build_star_visibility(
         nadir_unit=payload["nadir_unit"],
         sun_unit=payload["sun_unit"],
         moon_unit=payload["moon_unit"],
+        observer_dist_km=payload["observer_dist_km"],
         zenith_unit=payload["zenith_unit"],
         limb_angle_rad=payload["limb_angle_rad"],
         orbit_slices=payload["orbit_slices"],
@@ -469,14 +491,7 @@ def _build_planet_transits(
             star_metadata,
             observer_location,
         )
-        planet_df.to_parquet(
-            planet_output,
-            index=False,
-            engine="pyarrow",
-            compression="snappy",
-            write_statistics=False,
-            use_dictionary=False,
-        )
+        _write_visibility_parquet(planet_df, planet_output, config)
         if not planet_df.empty:
             generated.append((star_name, planet_name))
 
@@ -503,13 +518,13 @@ def _compute_planet_transits(
     if t_mjd.size == 0:
         return pd.DataFrame(
             {
-                col: np.array([], dtype=float)
-                for col in [
-                    "Transits",
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                ]
+                "Transits": np.array([], dtype=float),
+                "Transit_Start": np.array([], dtype=float),
+                "Transit_Stop": np.array([], dtype=float),
+                "Transit_Start_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Stop_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Coverage": np.array([], dtype=float),
+                "SAA_Overlap": np.array([], dtype=float),
             }
         )
 
@@ -525,13 +540,13 @@ def _compute_planet_transits(
         )
         return pd.DataFrame(
             {
-                col: np.array([], dtype=float)
-                for col in [
-                    "Transits",
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                ]
+                "Transits": np.array([], dtype=float),
+                "Transit_Start": np.array([], dtype=float),
+                "Transit_Stop": np.array([], dtype=float),
+                "Transit_Start_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Stop_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Coverage": np.array([], dtype=float),
+                "SAA_Overlap": np.array([], dtype=float),
             }
         )
 
@@ -567,13 +582,13 @@ def _compute_planet_transits(
         )
         return pd.DataFrame(
             {
-                col: np.array([], dtype=float)
-                for col in [
-                    "Transits",
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                ]
+                "Transits": np.array([], dtype=float),
+                "Transit_Start": np.array([], dtype=float),
+                "Transit_Stop": np.array([], dtype=float),
+                "Transit_Start_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Stop_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Coverage": np.array([], dtype=float),
+                "SAA_Overlap": np.array([], dtype=float),
             }
         )
 
@@ -593,13 +608,13 @@ def _compute_planet_transits(
     if not mid_transits_list:
         return pd.DataFrame(
             {
-                col: np.array([], dtype=float)
-                for col in [
-                    "Transits",
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                ]
+                "Transits": np.array([], dtype=float),
+                "Transit_Start": np.array([], dtype=float),
+                "Transit_Stop": np.array([], dtype=float),
+                "Transit_Start_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Stop_UTC": pd.Series([], dtype="datetime64[ns]"),
+                "Transit_Coverage": np.array([], dtype=float),
+                "SAA_Overlap": np.array([], dtype=float),
             }
         )
 
@@ -627,7 +642,11 @@ def _compute_planet_transits(
     saa_overlap = np.zeros(len(start_datetimes), dtype=float)
 
     for idx, (start_dt, end_dt) in enumerate(zip(start_datetimes, end_datetimes)):
-        tran_minutes = pd.date_range(start_dt, end_dt, freq="min").to_pydatetime()
+        # Use periods= to generate a half-open [start, end) range so the
+        # denominator equals the number of 1-minute intervals, not N+1 (the
+        # inclusive pd.date_range default would give off-by-one coverage).
+        n_minutes = int((end_dt - start_dt).total_seconds() // 60)
+        tran_minutes = pd.date_range(start_dt, periods=n_minutes, freq="min").to_pydatetime()
         if len(tran_minutes) == 0:
             continue
         minute_set = set(tran_minutes)
@@ -661,6 +680,7 @@ def _compute_planet_transits(
 def _apply_transit_overlaps(
     generated_planets: Iterable[tuple[str, str]],
     output_root: Path,
+    config: PandoraSchedulerConfig | None = None,
 ) -> None:
     star_planets: dict[str, list[str]] = {}
     for star_name, planet_name in generated_planets:
@@ -679,13 +699,14 @@ def _apply_transit_overlaps(
             if not planet_path.exists():
                 all_have_overlap = False
                 break
-            # Quick check: just read the header line to see if Transit_Overlap exists
+            # Quick check via parquet schema metadata.
             try:
-                with open(planet_path, "r") as f:
-                    header = f.readline().strip()
-                    if "Transit_Overlap" not in header:
-                        all_have_overlap = False
-                        break
+                import pyarrow.parquet as pq
+
+                schema = pq.read_schema(planet_path)
+                if "Transit_Overlap" not in schema.names:
+                    all_have_overlap = False
+                    break
             except Exception:
                 all_have_overlap = False
                 break
@@ -706,12 +727,6 @@ def _apply_transit_overlaps(
                 )
             df = read_parquet_cached(
                 str(planet_path),
-                columns=[
-                    "Transit_Start",
-                    "Transit_Stop",
-                    "Transit_Coverage",
-                    "SAA_Overlap",
-                ],
             )
             if df is None:
                 raise FileNotFoundError(
@@ -742,10 +757,11 @@ def _apply_transit_overlaps(
                     Time(end_mjd, format="mjd", scale="utc").to_datetime()
                 ).dt.floor("min")
 
-            # Build minute sets for each transit
+            # Build minute sets for each transit (half-open [start, end)).
             for start_dt, end_dt in zip(start_times, end_times):
+                n_minutes = int((end_dt - start_dt).total_seconds() // 60)
                 minutes = list(
-                    pd.date_range(start_dt, end_dt, freq="min").to_pydatetime()
+                    pd.date_range(start_dt, periods=n_minutes, freq="min").to_pydatetime()
                 )
                 if not minutes:
                     sets.append((set(), 0))
@@ -782,11 +798,14 @@ def _apply_transit_overlaps(
             planet_path = (
                 output_root / star_name / planet / f"Visibility for {planet}.parquet"
             )
-            df.to_parquet(
-                planet_path,
-                index=False,
-                engine="pyarrow",
-                compression="snappy",
-                write_statistics=False,
-                use_dictionary=False,
-            )
+            if config is not None:
+                _write_visibility_parquet(df, planet_path, config)
+            else:
+                df.to_parquet(
+                    planet_path,
+                    index=False,
+                    engine="pyarrow",
+                    compression="snappy",
+                    write_statistics=False,
+                    use_dictionary=False,
+                )

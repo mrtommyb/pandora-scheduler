@@ -111,6 +111,7 @@ def _run_catalog(
         gmat_ephemeris=gmat_path,
         targets_manifest=manifest,
         output_dir=out_dir,
+        extra_inputs={"data_subdir": "data"},
         force_regenerate=True,
         sun_avoidance_deg=45.0,
         moon_avoidance_deg=30.0,

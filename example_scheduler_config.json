@@ -24,8 +24,12 @@
 
   "# Behavior flags": null,
   "force_regenerate": false,
+  "primary_only_mode": false,
   "use_target_list_for_occultations": false,
   "prioritise_occultations_by_slew": false,
+  "enable_occultation_xml": true,
+  "enable_occultation_pass1": true,
+  "strict_occultation_time_limits": true,
 
   "# Keepout / avoidance angles (degrees)": null,
   "visibility_sun_deg": 91.0,
@@ -51,6 +55,7 @@
       "occultation-standard"
     ],
     "generate_visibility": true,
+    "data_subdir": null,
     "visibility_gmat": "src/pandorascheduler/data/Pandora-600km-withoutdrag-20251018.txt",
     "visibility_output_root": null,
     "skip_manifests": false

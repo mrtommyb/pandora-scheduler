@@ -22,6 +22,7 @@ Timing & window
 Paths & data sources
 - `extra_inputs.target_definition_base` (string): path to PandoraTargetList target definition files (example: `/path/to/PandoraTargetList/target_definition_files`).
 - `extra_inputs.visibility_gmat` (string): path to GMAT ephemeris file used to generate visibilities (can also be provided via CLI `--gmat-ephemeris`).
+- `extra_inputs.data_subdir` (string, optional): relative directory name under the run output root used for generated manifests and visibility files. If omitted, the runner derives a default like `data_<sun>_<moon>_<earth>` from the keepout angles.
 
 Scheduling thresholds
 - `transit_coverage_min` (float 0-1, default `0.2`): minimum transit coverage to consider scheduling.
@@ -60,8 +61,12 @@ Standard star observations
 Behavior flags
 - `show_progress` (bool, default `false`): show progress bars during processing.
 - `force_regenerate` (bool, default `false`): force regeneration of intermediate files even if they already exist.
+- `primary_only_mode` (bool, default `false`): only schedule primary science targets; convert non-primary gap-fill windows into `Free Time`.
 - `use_target_list_for_occultations` (bool, default `false`): use the target list for occultation scheduling instead of a separate list.
 - `prioritise_occultations_by_slew` (bool, default `false`): prioritise occultation targets based on slew cost.
+- `enable_occultation_xml` (bool, default `true`): include occultation-target calculations when generating the science-calendar XML. Set to `false` to emit only visible-segment entries.
+- `enable_occultation_pass1` (bool, default `true`): run Pass 1 of the occultation search (single target covers all intervals). Set to `false` to skip directly to the multi-target greedy search (Pass 2).
+- `strict_occultation_time_limits` (bool, default `true`): raise an error when a target's requested-hours value cannot be found in the catalog. Set to `false` to log a warning and use a large fallback limit instead.
 
 Auxiliary sorting & metadata
 - `aux_sort_key` (string, default `"sort_by_tdf_priority"`): key used to sort auxiliary targets
@@ -75,6 +80,7 @@ Extra inputs (pipeline-specific)
   - `target_definition_base`: path to PandoraTargetList files
   - `target_definition_files`: list of which categories to convert into manifests (e.g. `["exoplanet","auxiliary-standard","monitoring-standard","occultation-standard"]`)
   - `generate_visibility`: boolean-like value to request visibility generation
+  - `data_subdir`: optional relative run data directory name; if omitted, one is derived from keepout angles
   - `visibility_gmat`: path to GMAT ephemeris file
   - `visibility_output_root`: optional override for where visibility files are written
   - `skip_manifests`: if true, skip regenerating target manifests (useful during iterative profiling)

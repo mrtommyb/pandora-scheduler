@@ -26,6 +26,19 @@ from pandorascheduler_rework.utils.io import (
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
+# ---------------------------------------------------------------------------
+# Transit Factor thresholds — intentionally distinct, do not unify.
+# ---------------------------------------------------------------------------
+# TOO_OVERRIDE_THRESHOLD: transit_ratio = transits_left_lifetime / transits_needed.
+#   When this ratio ≤ 1.0 the spacecraft has no margin — every remaining
+#   observable transit must be captured.  Triggers a forced Target-of-Opportunity
+#   override that bypasses normal scheduling priority.
+# URGENCY_THRESHOLD: when ANY candidate's Transit Factor ≤ 1.2 the window sort
+#   switches to urgency-first (ascending TF) so the most time-pressured target
+#   is preferred over pure quality-factor ranking.
+_TOO_OVERRIDE_THRESHOLD = 1.0
+_URGENCY_THRESHOLD = 1.2
+
 
 def _filter_visibility_by_time(
     vis: pd.DataFrame,
@@ -98,8 +111,10 @@ class SchedulerPaths:
     baseline_dir: Path
 
     @classmethod
-    def from_package_root(cls, package_dir: Path) -> "SchedulerPaths":
-        data_dir = package_dir / "data"
+    def from_package_root(
+        cls, package_dir: Path, data_dir_name: str = "data"
+    ) -> "SchedulerPaths":
+        data_dir = package_dir / data_dir_name
         return cls(
             package_dir=package_dir,
             data_dir=data_dir,
@@ -665,7 +680,7 @@ def _handle_targets_of_opportunity(
         tracker.loc[positive_needed, "Transits Left in Lifetime"]
         / tracker.loc[positive_needed, "Transits Needed"]
     )
-    critical_planets = tracker.loc[positive_needed & (transit_ratio <= 1)].copy()
+    critical_planets = tracker.loc[positive_needed & (transit_ratio <= _TOO_OVERRIDE_THRESHOLD)].copy()
 
     schedule_parts: list[pd.DataFrame] = []
     forced_observation = False
@@ -829,7 +844,7 @@ def _schedule_auxiliary_target(
     # `obs_range` was previously created here but not used; remove to satisfy lint
     active_start = start
     scheduled_rows: list[list] = []
-    row_columns = ["Target", "Observation Start", "Observation Stop", "RA", "DEC"]
+    row_columns = ["Target", "Observation Start", "Observation Stop", "RA", "DEC", "Comments"]
     std_visible_duration_by_target: dict[str, timedelta] = {}
 
     def _accumulate_observation_time(result_df: pd.DataFrame) -> None:
@@ -845,6 +860,13 @@ def _schedule_auxiliary_target(
             state.all_target_obs_time[target_label] = (
                 state.all_target_obs_time.get(target_label, timedelta()) + duration
             )
+
+    if config.primary_only_mode:
+        result = pd.DataFrame(
+            [["Free Time", start, stop, float("nan"), float("nan"), ""]],
+            columns=row_columns,
+        )
+        return result, "Primary-only mode enabled, skipping non-primary scheduling."
 
     obs_std_duration = timedelta(hours=config.std_obs_duration_hours)
     if (
@@ -999,7 +1021,7 @@ def _schedule_auxiliary_target(
 
             std_label = f"{std_name} STD"
             scheduled_rows.append(
-                [std_label, active_start, std_row_end, std_ra, std_dec]
+                [std_label, active_start, std_row_end, std_ra, std_dec, ""]
             )
             std_visible_duration_by_target[std_label] = (
                 std_visible_duration_by_target.get(std_label, timedelta())
@@ -1042,7 +1064,7 @@ def _schedule_auxiliary_target(
             stop,
         )
         scheduled_rows.append(
-            ["Free Time", active_start, stop, float("nan"), float("nan")]
+            ["Free Time", active_start, stop, float("nan"), float("nan"), ""]
         )
         result = pd.DataFrame(scheduled_rows, columns=row_columns)
         _accumulate_observation_time(result)
@@ -1050,7 +1072,7 @@ def _schedule_auxiliary_target(
 
     if config.aux_sort_key is None:
         scheduled_rows.append(
-            ["Free Time", active_start, stop, float("nan"), float("nan")]
+            ["Free Time", active_start, stop, float("nan"), float("nan"), ""]
         )
         result = pd.DataFrame(scheduled_rows, columns=row_columns)
         _accumulate_observation_time(result)
@@ -1225,10 +1247,15 @@ def _schedule_auxiliary_target(
                 if best_visibility >= 100 * config.min_visibility:
                     chosen_idx = vis_any[any_idx]
                 else:
+                    # Schedule the best available target anyway but flag it
+                    chosen_idx = vis_any[any_idx]
                     logger.warning(
-                        "No non-primary target with visibility greater than %.2f%% from %s",
+                        "No non-primary target with visibility >= %.2f%% from %s; "
+                        "scheduling %s with %.2f%% visibility",
                         100 * config.min_visibility,
                         target_def,
+                        names[vis_any[any_idx]],
+                        best_visibility,
                     )
 
             if chosen_idx is None:
@@ -1250,13 +1277,21 @@ def _schedule_auxiliary_target(
 
             if best_visibility is not None and best_visibility >= 100.0:
                 log_info = f"{name} scheduled for non-primary observation with full visibility."
+                comment = ""
+            elif best_visibility is not None and best_visibility < 100 * config.min_visibility:
+                log_info = (
+                    f"{name} scheduled with {best_visibility:.2f}% visibility "
+                    f"(below threshold {100 * config.min_visibility:.2f}%)"
+                )
+                comment = f"Visibility = {best_visibility:.2f}%"
             else:
                 log_info = (
                     "No non-primary target with full visibility; "
                     f"{name} scheduled with {float(best_visibility or 0.0):.2f}% visibility"
                 )
+                comment = ""
 
-            scheduled_rows.append([name, active_start, stop, ra_val, dec_val])
+            scheduled_rows.append([name, active_start, stop, ra_val, dec_val, comment])
             logger.info(
                 "%s scheduled for non-primary observations from %s",
                 name,
@@ -1267,7 +1302,7 @@ def _schedule_auxiliary_target(
 
     if selected_row is None:
         scheduled_rows.append(
-            ["Free Time", active_start, stop, float("nan"), float("nan")]
+            ["Free Time", active_start, stop, float("nan"), float("nan"), ""]
         )
     else:
         name = selected_row[0]
@@ -1295,6 +1330,40 @@ def _schedule_auxiliary_target(
     return result, log_info
 
 
+def _primary_transit_comment(target_list: pd.DataFrame, planet_name: str) -> str:
+    """Return a comment labeling a transit as primary or secondary.
+
+    Uses the ``Primary Target`` column if present; otherwise falls back to
+    ``Number of Transits to Capture == 10`` as a heuristic for primary targets
+    (matching the convention used in PR #6).
+    """
+    if target_list.empty or "Planet Name" not in target_list.columns:
+        return ""
+    match = target_list.loc[target_list["Planet Name"] == planet_name]
+    if match.empty:
+        return ""
+    row = match.iloc[0]
+    if "Primary Target" in target_list.columns:
+        val = row.get("Primary Target")
+        if pd.isna(val):
+            return "secondary exoplanet transit"
+        try:
+            if bool(val):
+                return "primary exoplanet transit"
+        except (TypeError, ValueError):
+            pass
+        return "secondary exoplanet transit"
+    if "Number of Transits to Capture" in target_list.columns:
+        try:
+            n_transits = int(row["Number of Transits to Capture"])
+        except (TypeError, ValueError):
+            return ""
+        if n_transits >= 10:
+            return "primary exoplanet transit"
+        return "secondary exoplanet transit"
+    return ""
+
+
 def _schedule_primary_target(
     temp_df: pd.DataFrame,
     state: SchedulerState,
@@ -1310,7 +1379,7 @@ def _schedule_primary_target(
     # We intentionally make this dominate over quality in the non-critical case.
     full_coverage = temp_df["Transit Coverage"].astype(float) >= 0.999999
 
-    if (temp_df["Transit Factor"] <= 2).any():
+    if (temp_df["Transit Factor"] <= _URGENCY_THRESHOLD).any():
         # Critical case: urgency still wins, but prefer full coverage when urgency ties.
         ranked = (
             temp_df.assign(_full_coverage=full_coverage)
@@ -1407,6 +1476,7 @@ def _schedule_primary_target(
             )
             dfs.append(free_time_df)
 
+    transit_comment = _primary_transit_comment(inputs.target_list, planet_name)
     main_schedule = pd.DataFrame(
         [
             [
@@ -1419,7 +1489,7 @@ def _schedule_primary_target(
                 saa_cover,
                 s_factor,
                 q_factor,
-                np.nan,
+                transit_comment,
             ]
         ],
         columns=[
